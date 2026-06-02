@@ -1,3 +1,4 @@
+use std::arch::x86_64::_bittest;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -12,6 +13,13 @@ pub enum TgaError {
     UnsupportedFormat(u8),
     BadData(&'static str),
 }
+
+pub enum TGAImageType {
+    Grayscale = 1,
+    RGB = 3,
+    RGBA = 4,
+}
+
 
 impl fmt::Display for TgaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -78,12 +86,18 @@ pub struct TGAImage {
 }
 
 impl TGAImage {
-    pub fn new(w: usize, h: usize, bpp: u8) -> Self {
+    pub fn new(w: usize, h: usize, bpp: TGAImageType) -> Self {
+        let _bpp = match bpp {
+            TGAImageType::Grayscale => 1,
+            TGAImageType::RGB => 3,
+            TGAImageType::RGBA => 4,
+        };
+
         TGAImage {
             w,
             h,
-            bpp,
-            data: vec![0; w * h * bpp as usize],
+            bpp: _bpp,
+            data: vec![0; w * h * (_bpp as usize)],
         }
     }
 
@@ -237,6 +251,11 @@ impl TGAImage {
         vflip: bool,
         rle: bool,
     ) -> Result<(), TgaError> {
+        if self.bpp != 1 && self.bpp != 3 && self.bpp != 4 {
+            return Err(TgaError::BadHeader(
+                "invalid bytes per pixel: must be 1 (grayscale), 3 (RGB), or 4 (RGBA)",
+            ));
+        }
         let mut file = File::create(filename.as_ref())?;
 
         let header = TgaHeader {
@@ -248,7 +267,13 @@ impl TGAImage {
             } else {
                 if rle { 10 } else { 2 }
             },
-            image_descriptor: if vflip { 0x00 } else { 0x20 },
+            image_descriptor: {
+                let mut desc = if vflip { 0x00 } else { 0x20 };
+                if self.bpp == 4 {
+                    desc |= 8; // 8-bit alpha channel depth
+                }
+                desc
+            },
             ..Default::default()
         };
 
