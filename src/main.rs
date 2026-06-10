@@ -1,6 +1,11 @@
+mod datatype;
+mod drawline;
+mod drawtriangle;
 mod tgaimage;
 
+use drawtriangle::DrawTriangle;
 use tgaimage::{TGAColor, TGAImage, TGAImageType};
+// use datatype::Point2D;
 
 fn main() {
     let red = TGAColor::new(255, 0, 0, 255);
@@ -12,13 +17,13 @@ fn main() {
     for y in 0..200 {
         for x in 0..200 {
             if x < 100 && y < 100 {
-                img.set(x, y, red);
+                img.set(x, y, &red);
             } else if x >= 100 && y < 100 {
-                img.set(x, y, green);
+                img.set(x, y, &green);
             } else if x < 100 && y >= 100 {
-                img.set(x, y, blue);
+                img.set(x, y, &blue);
             } else {
-                img.set(x, y, white);
+                img.set(x, y, &white);
             }
         }
     }

@@ -2,6 +2,7 @@ use std::arch::x86_64::_bittest;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::Component::ParentDir;
 use std::path::Path;
 
 const MAX_CHUNK_LENGTH: u8 = 128;
@@ -101,6 +102,14 @@ impl TGAImage {
         }
     }
 
+    pub fn set_background_color(&mut self, c: &TGAColor) {
+        for x in 0..self.w {
+            for y in 0..self.h {
+                self.set(x, y, c);
+            }
+        }
+    }
+
     pub fn width(&self) -> usize {
         self.w
     }
@@ -134,7 +143,7 @@ impl TGAImage {
         Some(c)
     }
 
-    pub fn set(&mut self, x: usize, y: usize, c: TGAColor) {
+    pub fn set(&mut self, x: usize, y: usize, c: &TGAColor) {
         if self.data.is_empty() || x >= self.w || y >= self.h {
             return;
         }
@@ -379,7 +388,9 @@ impl TGAImage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::tgaimage::TGAImageType::Grayscale;
+
+use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -389,7 +400,7 @@ mod tests {
         std::env::temp_dir().join(format!("tinyrenderer_test_{}.tga", n))
     }
 
-    fn checker_image(w: usize, h: usize, bpp: u8) -> TGAImage {
+    fn checker_image(w: usize, h: usize, bpp: TGAImageType) -> TGAImage {
         let mut img = TGAImage::new(w, h, bpp);
         for y in 0..h {
             for x in 0..w {
@@ -397,7 +408,7 @@ mod tests {
                 let g = ((y * 64) % 256) as u8;
                 let b = 128u8;
                 let a = 255u8;
-                img.set(x, y, TGAColor::new(r, g, b, a));
+                img.set(x, y, &TGAColor::new(r, g, b, a));
             }
         }
         img
@@ -405,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_create_and_get_pixel() {
-        let img = checker_image(4, 4, 4);
+        let img = checker_image(4, 4, TGAImageType::RGBA);
         let c = img.get(1, 1).unwrap();
         assert_eq!(c.r, 64);
         assert_eq!(c.g, 64);
@@ -418,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_get_out_of_bounds() {
-        let img = checker_image(2, 2, 4);
+        let img = checker_image(2, 2, TGAImageType::RGBA);
         assert!(img.get(2, 2).is_none());
         assert!(img.get(5, 0).is_none());
         assert!(img.get(0, 5).is_none());
@@ -426,14 +437,14 @@ mod tests {
 
     #[test]
     fn test_set_out_of_bounds_no_panic() {
-        let mut img = checker_image(2, 2, 4);
-        img.set(10, 10, TGAColor::new(255, 0, 0, 255));
+        let mut img = checker_image(2, 2, TGAImageType::RGBA);
+        img.set(10, 10, &TGAColor::new(255, 0, 0, 255));
         assert!(img.get(10, 10).is_none());
     }
 
     #[test]
     fn test_width_height_bpp() {
-        let img = TGAImage::new(10, 20, 3);
+        let img = TGAImage::new(10, 20, TGAImageType::RGB);
         assert_eq!(img.width(), 10);
         assert_eq!(img.height(), 20);
         assert_eq!(img.bytes_per_pixel(), 3);
@@ -441,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_flip_horizontally() {
-        let mut img = checker_image(4, 4, 4);
+        let mut img = checker_image(4, 4, TGAImageType::RGBA);
         let tl = img.get(0, 0).unwrap();
         let tr = img.get(3, 0).unwrap();
 
@@ -453,7 +464,7 @@ mod tests {
 
     #[test]
     fn test_flip_vertically() {
-        let mut img = checker_image(4, 4, 4);
+        let mut img = checker_image(4, 4, TGAImageType::RGBA);
         let tl = img.get(0, 0).unwrap();
         let bl = img.get(0, 3).unwrap();
 
@@ -465,7 +476,7 @@ mod tests {
 
     #[test]
     fn test_double_flip_is_identity() {
-        let mut img = checker_image(5, 5, 4);
+        let mut img = checker_image(5, 5, TGAImageType::RGBA);
         let original = pixels(&img, 5, 5);
 
         img.flip_horizontally();
@@ -490,14 +501,14 @@ mod tests {
     #[test]
     fn test_grayscale_roundtrip() {
         let path = test_path();
-        let mut img = TGAImage::new(3, 3, 1);
-        img.set(0, 0, TGAColor::new(0, 0, 0, 0));
-        img.set(1, 1, TGAColor::new(0, 0, 128, 0));
-        img.set(2, 2, TGAColor::new(0, 0, 255, 0));
+        let mut img = TGAImage::new(3, 3, TGAImageType::Grayscale);
+        img.set(0, 0, &TGAColor::new(0, 0, 0, 0));
+        img.set(1, 1, &TGAColor::new(0, 0, 128, 0));
+        img.set(2, 2, &TGAColor::new(0, 0, 255, 0));
 
         img.write_tga_file(&path, false, false).unwrap();
 
-        let mut loaded = TGAImage::new(1, 1, 1);
+        let mut loaded = TGAImage::new(1, 1, TGAImageType::Grayscale);
         loaded.read_tga_file(&path).unwrap();
         assert_eq!(loaded.width(), 3);
         assert_eq!(loaded.height(), 3);
@@ -510,11 +521,11 @@ mod tests {
     #[test]
     fn test_rgb_roundtrip() {
         let path = test_path();
-        let img = checker_image(4, 4, 3);
+        let img = checker_image(4, 4, TGAImageType::RGB);
 
         img.write_tga_file(&path, false, false).unwrap();
 
-        let mut loaded = TGAImage::new(1, 1, 1);
+        let mut loaded = TGAImage::new(1, 1, TGAImageType::RGB);
         loaded.read_tga_file(&path).unwrap();
         assert_eq!(loaded.width(), 4);
         assert_eq!(loaded.height(), 4);
@@ -532,11 +543,11 @@ mod tests {
     #[test]
     fn test_rgba_roundtrip() {
         let path = test_path();
-        let img = checker_image(4, 4, 4);
+        let img = checker_image(4, 4, TGAImageType::RGBA);
 
         img.write_tga_file(&path, false, false).unwrap();
 
-        let mut loaded = TGAImage::new(1, 1, 1);
+        let mut loaded = TGAImage::new(1, 1, TGAImageType::RGBA);
         loaded.read_tga_file(&path).unwrap();
         assert_eq!(loaded.width(), 4);
         assert_eq!(loaded.height(), 4);
@@ -554,11 +565,11 @@ mod tests {
     #[test]
     fn test_rle_roundtrip() {
         let path = test_path();
-        let img = checker_image(4, 4, 4);
+        let img = checker_image(4, 4, TGAImageType::RGBA);
 
         img.write_tga_file(&path, false, true).unwrap();
 
-        let mut loaded = TGAImage::new(1, 1, 1);
+        let mut loaded = TGAImage::new(1, 1, TGAImageType::RGBA);
         loaded.read_tga_file(&path).unwrap();
         assert_eq!(loaded.width(), 4);
         assert_eq!(loaded.height(), 4);
@@ -576,17 +587,17 @@ mod tests {
     #[test]
     fn test_rle_uniform_image() {
         let path = test_path();
-        let mut img = TGAImage::new(8, 8, 4);
+        let mut img = TGAImage::new(8, 8, TGAImageType::RGBA);
         let red = TGAColor::new(255, 0, 0, 255);
         for y in 0..8 {
             for x in 0..8 {
-                img.set(x, y, red);
+                img.set(x, y, &red);
             }
         }
 
         img.write_tga_file(&path, false, true).unwrap();
 
-        let mut loaded = TGAImage::new(1, 1, 1);
+        let mut loaded = TGAImage::new(1, 1, TGAImageType::RGBA);
         loaded.read_tga_file(&path).unwrap();
         assert_eq!(loaded.width(), 8);
         assert_eq!(loaded.height(), 8);
@@ -602,7 +613,7 @@ mod tests {
 
     #[test]
     fn test_read_nonexistent_file() {
-        let result = TGAImage::new(1, 1, 4).read_tga_file("/nonexistent/path/file.tga");
+        let result = TGAImage::new(1, 1, TGAImageType::RGBA).read_tga_file("/nonexistent/path/file.tga");
         assert!(result.is_err());
     }
 
@@ -616,7 +627,7 @@ mod tests {
         file.write_all(&header).unwrap();
         drop(file);
 
-        let mut img = TGAImage::new(1, 1, 4);
+        let mut img = TGAImage::new(1, 1, TGAImageType::RGBA);
         let result = img.read_tga_file(&path);
         assert!(result.is_err());
         std::fs::remove_file(&path).ok();
@@ -624,7 +635,7 @@ mod tests {
 
     #[test]
     fn test_empty_image() {
-        let img = TGAImage::new(0, 0, 4);
+        let img = TGAImage::new(0, 0, TGAImageType::RGBA);
         assert!(img.get(0, 0).is_none());
         assert_eq!(img.width(), 0);
         assert_eq!(img.height(), 0);
@@ -632,9 +643,9 @@ mod tests {
 
     #[test]
     fn test_set_modifies_pixel() {
-        let mut img = TGAImage::new(2, 2, 4);
+        let mut img = TGAImage::new(2, 2, TGAImageType::RGBA);
         let blue = TGAColor::new(0, 0, 255, 255);
-        img.set(1, 0, blue);
+        img.set(1, 0, &blue);
         assert_eq!(img.get(1, 0).unwrap(), blue);
         assert_ne!(img.get(0, 0).unwrap(), blue);
     }
@@ -653,20 +664,20 @@ mod tests {
         let path = test_path();
         let w = 64;
         let h = 64;
-        let mut img = TGAImage::new(w, h, 4);
+        let mut img = TGAImage::new(w, h, TGAImageType::RGBA);
         for y in 0..h {
             for x in 0..w {
                 let r = (x * 4) as u8;
                 let g = (y * 4) as u8;
                 let b = ((x + y) * 2) as u8;
                 let a = 255;
-                img.set(x, y, TGAColor::new(r, g, b, a));
+                img.set(x, y, &TGAColor::new(r, g, b, a));
             }
         }
 
         img.write_tga_file(&path, false, true).unwrap();
 
-        let mut loaded = TGAImage::new(1, 1, 1);
+        let mut loaded = TGAImage::new(1, 1, TGAImageType::Grayscale);
         loaded.read_tga_file(&path).unwrap();
         assert_eq!(loaded.width(), w);
         assert_eq!(loaded.height(), h);
@@ -683,11 +694,11 @@ mod tests {
     #[test]
     fn test_vflip_false_roundtrip() {
         let path = test_path();
-        let img = checker_image(4, 4, 4);
+        let img = checker_image(4, 4, TGAImageType::RGBA);
 
         img.write_tga_file(&path, false, false).unwrap();
 
-        let mut loaded = TGAImage::new(1, 1, 1);
+        let mut loaded = TGAImage::new(1, 1, TGAImageType::Grayscale);
         loaded.read_tga_file(&path).unwrap();
 
         for y in 0..4 {
