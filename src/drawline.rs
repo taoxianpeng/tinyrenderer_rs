@@ -1,7 +1,7 @@
 use crate::datatype::Point2D;
 use crate::tgaimage::*;
 
-trait Drawline {
+pub trait Drawline {
     fn draw(image: &mut TGAImage, p0: &Point2D, p1: &Point2D, c: &TGAColor);
 }
 
@@ -49,25 +49,42 @@ impl<'a> Bresenham<'a> {
 
 impl<'a> Drawline for Bresenham<'a> {
     fn draw(image: &mut TGAImage, p0: &Point2D, p1: &Point2D, c: &TGAColor) {
-        // 确保 x0 ≤ x1，使 x 方向单调递增
-        let (mut x0, mut y0, x1, y1) = if p0.x > p1.x {
-            (p1.x, p1.y, p0.x, p0.y)
-        } else {
-            (p0.x, p0.y, p1.x, p1.y)
-        };
+        let mut x0 = p0.x;
+        let mut y0 = p0.y;
+        let mut x1 = p1.x;
+        let mut y1 = p1.y;
 
-        let dx = x1 - x0; // dx > 0 （|k| < 1 保证 dx > dy ≥ 0）
-        let dy = y1 - y0; // 可正、负或零
+        // 若 |dy| > |dx|（陡峭），交换 x 和 y，以长方向为主循环
+        let steep = (y1 - y0).abs() > (x1 - x0).abs();
+        if steep {
+            std::mem::swap(&mut x0, &mut y0);
+            std::mem::swap(&mut x1, &mut y1);
+        }
+
+        // 确保主循环变量单调递增
+        if x0 > x1 {
+            std::mem::swap(&mut x0, &mut x1);
+            std::mem::swap(&mut y0, &mut y1);
+        }
+
+        let dx = x1 - x0;
+        let dy = y1 - y0;
         let dy_abs = dy.abs();
-
         let y_step: i32 = if y1 >= y0 { 1 } else { -1 };
+
         let mut d = 2 * dy_abs - dx;
         let mut y = y0;
 
         for x in x0..=x1 {
-            image.set(x as usize, y as usize, &c);
+            if steep {
+                // 交换过坐标，画点时换回：set(y_alg, x_alg)
+                image.set(y as usize, x as usize, c);
+            } else {
+                image.set(x as usize, y as usize, c);
+            }
+
             if d >= 0 {
-                y += y_step; // 沿 y_step 方向走一步
+                y += y_step;
                 d += 2 * (dy_abs - dx);
             } else {
                 d += 2 * dy_abs;
@@ -166,6 +183,54 @@ mod test {
                 r: 200,
                 g: 50,
                 b: 80,
+                a: 255,
+            },
+        );
+        image.write_tga_file("output.tga", false, true).unwrap();
+    }
+
+    #[test]
+    fn test_line_steep_positive() {
+        // 陡峭正斜率：|dy| > |dx|
+        let mut image = TGAImage::new(200, 200, TGAImageType::RGB);
+        image.set_background_color(&TGAColor {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        });
+        Bresenham::draw(
+            &mut image,
+            &Point2D { x: 30, y: 30 },
+            &Point2D { x: 80, y: 170 },
+            &TGAColor {
+                r: 50,
+                g: 150,
+                b: 200,
+                a: 255,
+            },
+        );
+        image.write_tga_file("output.tga", false, true).unwrap();
+    }
+
+    #[test]
+    fn test_line_steep_negative() {
+        // 陡峭负斜率：|dy| > |dx|
+        let mut image = TGAImage::new(200, 200, TGAImageType::RGB);
+        image.set_background_color(&TGAColor {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        });
+        Bresenham::draw(
+            &mut image,
+            &Point2D { x: 80, y: 170 },
+            &Point2D { x: 30, y: 30 },
+            &TGAColor {
+                r: 50,
+                g: 150,
+                b: 200,
                 a: 255,
             },
         );
