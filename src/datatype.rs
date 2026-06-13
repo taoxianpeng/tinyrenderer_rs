@@ -1,3 +1,5 @@
+use std::fmt;
+
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub struct Point2D {
     pub x: i32,
@@ -57,6 +59,41 @@ impl Point2D {
         let dx = (self.x - other.x) as f64;
         let dy = (self.y - other.y) as f64;
         (dx * dx + dy * dy).sqrt()
+    }
+}
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub struct Vec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+impl fmt::Display for Vec3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({}, {}, {})", self.x, self.y, self.z)
+    }
+}
+
+impl Vec3 {
+    pub fn new() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        }
+    }
+
+    pub fn add(&mut self, v: &Vec3) {
+        self.x += v.x;
+        self.y += v.y;
+        self.z += v.z;
+    }
+
+    pub fn sub(&mut self, v: &Vec3) {
+        self.x -= v.x;
+        self.y -= v.y;
+        self.z -= v.z;
     }
 }
 

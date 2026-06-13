@@ -43,12 +43,15 @@ impl Bresenham {
                 image.set(x as usize, y as usize, c);
             }
 
-            if d >= 0 {
-                y += y_step;
-                d += 2 * (dy_abs - dx);
-            } else {
-                d += 2 * dy_abs;
-            }
+            // if d >= 0 {
+            // y += y_step;
+            // d += 2 * (dy_abs - dx);
+            // } else {
+            // d += 2 * dy_abs;
+            // }
+            let k = if d >= 0 { 1 } else { 0 };
+            y += y_step * k;
+            d += 2 * (dy_abs - dx * k);
         }
     }
 }

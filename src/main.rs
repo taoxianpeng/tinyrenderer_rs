@@ -1,6 +1,7 @@
 mod datatype;
 mod drawline;
 mod drawtriangle;
+mod model;
 mod tgaimage;
 
 use drawtriangle::DrawTriangle;
@@ -22,7 +23,8 @@ fn main() {
         a: 255,
     });
 
-    for _ in 0..1600 {
+    let cycle_num = 16_000_000;
+    for _ in 0..cycle_num {
         let ramdom_color = TGAColor::new(
             rng.random_range(1..255),
             rng.random_range(1..255),
