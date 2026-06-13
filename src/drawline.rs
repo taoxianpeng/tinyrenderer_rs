@@ -5,50 +5,10 @@ pub trait Drawline {
     fn draw(image: &mut TGAImage, p0: &Point2D, p1: &Point2D, c: &TGAColor);
 }
 
-pub struct Bresenham<'a> {
-    image: &'a mut TGAImage,
-    p0: Point2D,
-    p1: Point2D,
-    bg_color: TGAColor,
-}
+pub struct Bresenham;
 
-impl<'a> Bresenham<'a> {
-    pub fn new(image: &'a mut TGAImage) -> Self {
-        Bresenham {
-            image,
-            p0: Point2D { x: 0, y: 0 },
-            p1: Point2D { x: 0, y: 0 },
-            bg_color: TGAColor {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-        }
-    }
-
-    pub fn from(mut self, p: Point2D) -> Self {
-        self.p0 = p;
-        self
-    }
-
-    pub fn to(mut self, p: Point2D) -> Self {
-        self.p1 = p;
-        self
-    }
-
-    pub fn set_bg_color(mut self, c: TGAColor) -> Self {
-        for x in 0..self.image.width() {
-            for y in 0..self.image.height() {
-                self.image.set(x, y, &c);
-            }
-        }
-        self
-    }
-}
-
-impl<'a> Drawline for Bresenham<'a> {
-    fn draw(image: &mut TGAImage, p0: &Point2D, p1: &Point2D, c: &TGAColor) {
+impl Bresenham {
+    pub fn draw(image: &mut TGAImage, p0: &Point2D, p1: &Point2D, c: &TGAColor) {
         let mut x0 = p0.x;
         let mut y0 = p0.y;
         let mut x1 = p1.x;
