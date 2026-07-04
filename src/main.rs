@@ -12,6 +12,8 @@ use glam::{Mat3, Mat4, Vec2, Vec3};
 use model::Model;
 use renderpipeline::{RenderPipleline, VertexInput, Uniforms};
 
+use crate::renderpipeline::lookat;
+
 fn main() {
     // 1. 加载 OBJ 模型
     let model: Model = Model::new(Path::new("assert/diablo3_pose.obj"));
@@ -54,7 +56,7 @@ fn main() {
     let eye    = Vec3::new(1.0, 1.0, 2.5);
     let center = Vec3::ZERO;
     let up     = Vec3::Y;
-    let view_mat = Mat4::look_at_rh(eye, center, up);
+    let view_mat = lookat(&eye, &center, &up);
 
     let proj_mat = Mat4::perspective_rh_gl(
         std::f32::consts::FRAC_PI_4, // 45° FOV

@@ -20,8 +20,23 @@ pub struct RenderPipleline<'a> {
     framebuffer: &'a mut TGAImage,
 }
 
-pub fn lookat() -> Mat4 {
-    Mat4::IDENTITY
+pub fn lookat(eye: &Vec3, center: &Vec3, up: &Vec3) -> Mat4 {
+    // 先算左向量
+    let f = (center - eye).normalize();         // -f -> +z direction 
+    let s = f.cross(up.clone()).normalize();    // +x direction
+    let u = s.cross(f.clone()).normalize();     // +y direction 
+
+    let x_offset = -s.dot(eye.clone());
+    let y_offset = -u.dot(eye.clone());
+    let z_offset = f.dot(eye.clone());
+
+    // glam Mat4 是列主序，from_cols 接收 4 个列向量
+    Mat4::from_cols(
+        Vec4::new(s.x, u.x, -f.x, 0.0),
+        Vec4::new(s.y, u.y, -f.y, 0.0),
+        Vec4::new(s.z, u.z, -f.z, 0.0),
+        Vec4::new(x_offset, y_offset, z_offset, 1.0),
+    )
 }
 
 pub fn perspective() -> Mat4 {
