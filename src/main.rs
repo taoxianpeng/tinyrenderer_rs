@@ -3,48 +3,95 @@ mod drawline;
 mod drawtriangle;
 mod model;
 mod tgaimage;
+mod renderpipeline;
 
-use drawtriangle::DrawTriangle;
-use rand::{Rng, RngExt};
+use std::path::Path;
 use tgaimage::{TGAColor, TGAImage, TGAImageType};
+use glam::{Mat3, Mat4, Vec2, Vec3};
 
-// test
-use drawline::Bresenham;
-
-use crate::datatype::Point2D;
+use model::Model;
+use renderpipeline::{RenderPipleline, VertexInput, Uniforms};
 
 fn main() {
-    let mut rng = rand::rng();
-    let mut img = TGAImage::new(200, 200, TGAImageType::RGBA);
-    img.set_background_color(&TGAColor {
-        r: 255,
-        g: 255,
-        b: 255,
-        a: 255,
-    });
+    // 1. 加载 OBJ 模型
+    let model: Model = Model::new(Path::new("assert/diablo3_pose.obj"));
+    println!(
+        "模型加载成功: {} 顶点, {} 面",
+        model.verts().len() - 1,
+        model.faces().len() - 1,
+    );
 
-    let cycle_num = 16_000_000;
-    for _ in 0..cycle_num {
-        let ramdom_color = TGAColor::new(
-            rng.random_range(1..255),
-            rng.random_range(1..255),
-            rng.random_range(1..255),
-            255,
-        );
-
-        let p0 = Point2D {
-            x: rng.random_range(0..200),
-            y: rng.random_range(0..100),
-        };
-
-        let p1 = Point2D {
-            x: rng.random_range(0..200),
-            y: rng.random_range(100..200),
-        };
-
-        Bresenham::draw(&mut img, &p0, &p1, &ramdom_color);
+    // 2. 构建顶点输入数组
+    //    遍历每个三角形面，将每个顶点的位置/法线/纹理坐标组成 VertexInput
+    let mut vertices: Vec<VertexInput> = Vec::new();
+    for face in model.faces() {
+        // 只处理三角形面（通常 obj 导出时已三角化）
+        if face.len() == 3 {
+            for idx in face {
+                let pos   = model.verts()[idx[0] as usize];
+                let normal = model.vert_normals()[idx[2] as usize];
+                let texcoord = {
+                    let vt = model.texture_verts()[idx[1] as usize];
+                    Vec2::new(vt.x, vt.y)
+                };
+                vertices.push(VertexInput { position: pos, normal, texcoord });
+            }
+        }
     }
+    println!("组装 {} 个顶点输入 ({} 个三角形)", vertices.len(), vertices.len() / 3);
 
-    img.write_tga_file("output.tga", false, true).unwrap();
-    println!("Generated output.tga");
+    // 3. 创建帧缓冲
+    let width  = 800;
+    let height = 800;
+    let mut framebuffer = TGAImage::new(width, height, TGAImageType::RGB);
+    framebuffer.set_background_color(&TGAColor { r: 30, g: 30, b: 30, a: 255 });
+
+    // 4. 设置相机 / 投影变换
+    let model_mat = Mat4::IDENTITY;
+
+    // 把模型摆正：绕 X 轴旋转 -90°，使 OBJ 的 Y-up 转为 Z-up 的世界坐标系
+    //（实际由 model matrix 控制，这里保持单位阵 + 调整 camera 位置即可）
+    let eye    = Vec3::new(1.0, 1.0, 2.5);
+    let center = Vec3::ZERO;
+    let up     = Vec3::Y;
+    let view_mat = Mat4::look_at_rh(eye, center, up);
+
+    let proj_mat = Mat4::perspective_rh_gl(
+        std::f32::consts::FRAC_PI_4, // 45° FOV
+        width as f32 / height as f32, // 宽高比
+        0.1,                          // near
+        10.0,                         // far
+    );
+
+    let model_view      = view_mat * model_mat;
+    let model_view_proj = proj_mat * model_view;
+    let normal_matrix   = Mat3::from_mat4(model_view.inverse().transpose());
+
+    let uniforms = Uniforms {
+        model: model_mat,
+        view: view_mat,
+        projection: proj_mat,
+        model_view,
+        model_view_proj,
+        normal_matrix,
+        light_dir:      Vec3::new(0.0, 0.0, -1.0).normalize(),
+        camera_pos:     eye,
+        ambient_color:  Vec3::new(0.1, 0.1, 0.1),
+        diffuse_color:  Vec3::new(0.7, 0.7, 0.7),
+        specular_color: Vec3::new(0.3, 0.3, 0.3),
+        diffuse_tex:    None,
+        normal_tex:     None,
+        specular_tex:   None,
+        glossiness_tex: None,
+    };
+
+    // 5. 运行渲染管线
+    let mut pipeline = RenderPipleline::new(&mut framebuffer);
+    pipeline.add_data(&vertices);
+    pipeline.set_uniforms(&uniforms);
+    pipeline.draw();
+
+    // 6. 输出渲染图
+    framebuffer.write_tga_file("output_render.tga", false, true).unwrap();
+    println!("输出完成: output_render.tga ({}x{})", width, height);
 }

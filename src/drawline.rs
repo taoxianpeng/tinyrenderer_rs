@@ -1,8 +1,65 @@
-use crate::datatype::Point2D;
-use crate::tgaimage::*;
+pub use crate::datatype::Point2D;
+pub use crate::tgaimage::*;
+pub use glam::Vec2;
 
 pub trait Drawline {
     fn draw(image: &mut TGAImage, p0: &Point2D, p1: &Point2D, c: &TGAColor);
+}
+
+/// DDA 浮点直线绘制 — 接受浮点坐标端点
+pub struct DDA;
+
+impl DDA {
+    pub fn draw(image: &mut TGAImage, p0: &Vec2, p1: &Vec2, c: &TGAColor) {
+        let mut x0 = p0.x;
+        let mut y0 = p0.y;
+        let mut x1 = p1.x;
+        let mut y1 = p1.y;
+
+        // 陡峭判断：|dy| > |dx| 则交换 x/y，保证沿长轴步进
+        let steep = (y1 - y0).abs() > (x1 - x0).abs();
+        if steep {
+            std::mem::swap(&mut x0, &mut y0);
+            std::mem::swap(&mut x1, &mut y1);
+        }
+
+        if x0 > x1 {
+            std::mem::swap(&mut x0, &mut x1);
+            std::mem::swap(&mut y0, &mut y1);
+        }
+
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+
+        // 主轴方向的像素步数
+        let steps = dx.round().abs() as usize;
+        if steps == 0 {
+            // 退化为单个像素
+            let px = x0.round() as usize;
+            let py = y0.round() as usize;
+            if steep {
+                image.set(py, px, c);
+            } else {
+                image.set(px, py, c);
+            }
+            return;
+        }
+
+        for i in 0..=steps {
+            let t = i as f32 / steps as f32;
+            let x = x0 + t * dx;
+            let y = y0 + t * dy;
+
+            let px = x.round() as usize;
+            let py = y.round() as usize;
+
+            if steep {
+                image.set(py, px, c);
+            } else {
+                image.set(px, py, c);
+            }
+        }
+    }
 }
 
 pub struct Bresenham;
@@ -198,5 +255,66 @@ mod test {
             },
         );
         image.write_tga_file("output.tga", false, true).unwrap();
+    }
+
+    // ======== DDA 浮点版本测试 ========
+
+    #[test]
+    fn test_dda_basic_diagonal() {
+        let mut image = TGAImage::new(500, 500, TGAImageType::RGB);
+        image.set_background_color(&TGAColor {
+            r: 255, g: 255, b: 255, a: 255,
+        });
+        DDA::draw(
+            &mut image,
+            &Vec2::new(100.0, 100.0),
+            &Vec2::new(400.0, 400.0),
+            &TGAColor { r: 100, g: 23, b: 30, a: 255 },
+        );
+        image.write_tga_file("output.tga", false, true).unwrap();
+    }
+
+    #[test]
+    fn test_dda_float_endpoints() {
+        // 浮点数端点，非整数位置
+        let mut image = TGAImage::new(200, 200, TGAImageType::RGB);
+        image.set_background_color(&TGAColor {
+            r: 255, g: 255, b: 255, a: 255,
+        });
+        DDA::draw(
+            &mut image,
+            &Vec2::new(30.3, 50.7),
+            &Vec2::new(170.8, 130.2),
+            &TGAColor { r: 200, g: 50, b: 80, a: 255 },
+        );
+        image.write_tga_file("output.tga", false, true).unwrap();
+    }
+
+    #[test]
+    fn test_dda_steep() {
+        // 陡峭线
+        let mut image = TGAImage::new(200, 200, TGAImageType::RGB);
+        image.set_background_color(&TGAColor {
+            r: 255, g: 255, b: 255, a: 255,
+        });
+        DDA::draw(
+            &mut image,
+            &Vec2::new(30.0, 30.0),
+            &Vec2::new(80.0, 170.0),
+            &TGAColor { r: 50, g: 150, b: 200, a: 255 },
+        );
+        image.write_tga_file("output.tga", false, true).unwrap();
+    }
+
+    #[test]
+    fn test_dda_same_point() {
+        // 同一个点
+        let mut image = TGAImage::new(10, 10, TGAImageType::RGB);
+        DDA::draw(
+            &mut image,
+            &Vec2::new(5.3, 5.7),
+            &Vec2::new(5.3, 5.7),
+            &TGAColor { r: 255, g: 0, b: 0, a: 255 },
+        );
     }
 }

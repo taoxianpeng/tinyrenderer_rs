@@ -21,9 +21,9 @@ impl Model {
         let reader = BufReader::new(file);
 
         let mut ret = Self {
-            verts: vec![Vec3::new()],
-            texture_verts: vec![Vec3::new()],
-            vert_normals: vec![Vec3::new()],
+            verts: vec![Vec3::ZERO],
+            texture_verts: vec![Vec3::ZERO],
+            vert_normals: vec![Vec3::ZERO],
             faces: vec![vec![[0, 0, 0]]],
         };
 
@@ -110,6 +110,24 @@ impl Model {
         }
 
         Err("invalid face data".to_string())
+    }
+
+    // ---- 只读访问器 ----
+
+    pub fn verts(&self) -> &Vec<Vec3> {
+        &self.verts
+    }
+
+    pub fn texture_verts(&self) -> &Vec<Vec3> {
+        &self.texture_verts
+    }
+
+    pub fn vert_normals(&self) -> &Vec<Vec3> {
+        &self.vert_normals
+    }
+
+    pub fn faces(&self) -> &Vec<Face> {
+        &self.faces
     }
 }
 

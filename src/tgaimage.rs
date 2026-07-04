@@ -1,11 +1,13 @@
-use std::arch::x86_64::_bittest;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::Component::ParentDir;
 use std::path::Path;
 
 const MAX_CHUNK_LENGTH: u8 = 128;
+
+pub const RED: TGAColor = TGAColor{r: 255, g: 0, b: 0, a: 255};
+pub const GREEN: TGAColor = TGAColor{r: 0, g: 255, b: 0, a: 255};
+pub const BLUE: TGAColor = TGAColor{r: 0, g: 0, b: 255, a: 255};
 
 #[derive(Debug)]
 pub enum TgaError {
