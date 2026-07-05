@@ -1,4 +1,8 @@
+use std::vec;
+
 use crate::drawtriangle::DrawTriangleFloat;
+use crate::renderpipeline::ProjectionMode::ORTHO;
+use crate::renderpipeline::ProjectionMode::PERSPECTIVE;
 use crate::tgaimage;
 use crate::tgaimage::TGAImage;
 use glam::Mat3;
@@ -6,6 +10,7 @@ use glam::Mat4;
 use glam::Vec2;
 use glam::Vec3;
 use glam::Vec4;
+use glam::vec4;
 
 pub enum PolygonMode {
     FILL,
@@ -22,9 +27,9 @@ pub struct RenderPipleline<'a> {
 
 pub fn lookat(eye: &Vec3, center: &Vec3, up: &Vec3) -> Mat4 {
     // 先算左向量
-    let f = (center - eye).normalize();         // -f -> +z direction 
-    let s = f.cross(up.clone()).normalize();    // +x direction
-    let u = s.cross(f.clone()).normalize();     // +y direction 
+    let f = (center - eye).normalize(); // -f -> +z direction 
+    let s = f.cross(up.clone()).normalize(); // +x direction
+    let u = s.cross(f.clone()).normalize(); // +y direction 
 
     let x_offset = -s.dot(eye.clone());
     let y_offset = -u.dot(eye.clone());
@@ -39,8 +44,47 @@ pub fn lookat(eye: &Vec3, center: &Vec3, up: &Vec3) -> Mat4 {
     )
 }
 
-pub fn perspective() -> Mat4 {
-    Mat4::IDENTITY
+pub enum ProjectionMode {
+    ORTHO,
+    PERSPECTIVE,
+}
+
+pub fn projection(
+    mode: ProjectionMode,
+    fov: f32,
+    // aspect_ratio: f32,
+    view_size: Vec2, // [width, height]
+    z_near: f32,
+    z_far: f32,
+) -> Mat4 {
+    match mode {
+        ORTHO => {
+            return Mat4::from_cols(
+                vec4(2.0 / view_size.x, 0.0, 0.0, 0.0),
+                vec4(0.0, 2.0 / view_size.y, 0.0, 0.0),
+                vec4(
+                    0.0,
+                    0.0,
+                    2.0 / (z_far - z_near),
+                    -(z_far + z_near) / (z_far - z_near),
+                ),
+                vec4(0.0, 0.0, 0.0, 1.0),
+            );
+        }
+        PERSPECTIVE => {
+            let aspect_ratio = view_size.x / view_size.y;
+            let tan_fov_div_2 = (fov / 2.0).tan();
+            let m_33 = (z_near + z_far) / (z_near - z_far);
+            let m_34 = -2.0 * z_near * z_far / (z_near - z_far);
+
+            Mat4::from_cols(
+                vec4(1.0 / (aspect_ratio * tan_fov_div_2), 0.0, 0.0, 0.0),
+                vec4(0.0, 1.0 / tan_fov_div_2, 0.0, 0.0),
+                vec4(0.0, 0.0, m_33, -1.0),
+                vec4(0.0, 0.0, m_34, 0.0),
+            )
+        }
+    }
 }
 
 impl<'a> RenderPipleline<'a> {

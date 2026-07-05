@@ -12,7 +12,7 @@ use glam::{Mat3, Mat4, Vec2, Vec3};
 use model::Model;
 use renderpipeline::{RenderPipleline, VertexInput, Uniforms};
 
-use crate::renderpipeline::lookat;
+use crate::renderpipeline::{lookat, projection};
 
 fn main() {
     // 1. 加载 OBJ 模型
@@ -58,9 +58,12 @@ fn main() {
     let up     = Vec3::Y;
     let view_mat = lookat(&eye, &center, &up);
 
-    let proj_mat = Mat4::perspective_rh_gl(
+    // let proj_mat = Mat4::perspective_rh_gl(
+    let proj_mat = projection(
+        renderpipeline::ProjectionMode::PERSPECTIVE,
         std::f32::consts::FRAC_PI_4, // 45° FOV
-        width as f32 / height as f32, // 宽高比
+        // width as f32 / height as f32, // 宽高比
+        Vec2 { x: width as f32, y: height as f32},
         0.1,                          // near
         10.0,                         // far
     );
