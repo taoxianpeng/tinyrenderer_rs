@@ -1,16 +1,11 @@
 use std::vec;
 
-use crate::drawtriangle::DrawTriangleFloat;
-use crate::renderpipeline::ProjectionMode::ORTHO;
-use crate::renderpipeline::ProjectionMode::PERSPECTIVE;
+use crate::drawline::TGAColor;
+use crate::drawtriangle::{ DrawTriangleFloat, DrawTriangle };
+use crate::renderpipeline::{ ProjectionMode::ORTHO, ProjectionMode::PERSPECTIVE };
 use crate::tgaimage;
 use crate::tgaimage::TGAImage;
-use glam::Mat3;
-use glam::Mat4;
-use glam::Vec2;
-use glam::Vec3;
-use glam::Vec4;
-use glam::vec4;
+use glam::{ Mat3, Mat4, Vec2, IVec2, Vec3, Vec4, vec4};
 
 pub enum PolygonMode {
     FILL,
@@ -161,28 +156,31 @@ impl<'a> RenderPipleline<'a> {
         let h = self.framebuffer.height() as f32;
 
         // clip-space → NDC（透视除法）→ 屏幕空间
-        let to_screen = |pos: &Vec4| -> Option<Vec2> {
+        let to_screen = |pos: &Vec4| -> Option<IVec2> {
             if pos.w.abs() < 1e-8 {
                 return None; // 剔除 w 接近 0 的退化三角形
             }
             let ndc = pos.truncate() / pos.w; // 透视除法 → NDC [-1,1]
-            Some(Vec2::new(
-                (ndc.x + 1.0) * 0.5 * w, // x: [-1,1] → [0,width]
-                (1.0 - ndc.y) * 0.5 * h, // y: [-1,1] → [0,height]，翻转 Y
+            Some(IVec2::new(
+                ((ndc.x + 1.0) * 0.5 * w).round() as i32, // x: [-1,1] → [0,width]
+                ((1.0 - ndc.y) * 0.5 * h).round() as i32, // y: [-1,1] → [0,height]，翻转 Y
             ))
         };
 
-        match self.polygon_mode {
-            PolygonMode::FILL => {}
-            PolygonMode::LINE => {
-                let p0 = to_screen(&input.triangle[0].position);
-                let p1 = to_screen(&input.triangle[1].position);
-                let p2 = to_screen(&input.triangle[2].position);
-                if let (Some(p0), Some(p1), Some(p2)) = (p0, p1, p2) {
-                    DrawTriangleFloat::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
+        let p0 = to_screen(&input.triangle[0].position);
+        let p1 = to_screen(&input.triangle[1].position);
+        let p2 = to_screen(&input.triangle[2].position);
+        if let (Some(p0), Some(p1), Some(p2)) = (p0, p1, p2) {
+            match self.polygon_mode {
+                    PolygonMode::FILL => {
+
+                    }
+                    PolygonMode::LINE => {
+                        // DrawTriangleFloat::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
+                        DrawTriangle::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
+                    }
+                    PolygonMode::Point => {}
                 }
-            }
-            PolygonMode::Point => {}
         }
     }
 
