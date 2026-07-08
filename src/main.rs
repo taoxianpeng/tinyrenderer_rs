@@ -94,6 +94,7 @@ fn main() {
     let mut pipeline = RenderPipleline::new(&mut framebuffer);
     pipeline.add_data(&vertices);
     pipeline.set_uniforms(&uniforms);
+    pipeline.set_draw_mode(renderpipeline::PolygonMode::FILL);
     pipeline.draw();
 
     // 6. 输出渲染图

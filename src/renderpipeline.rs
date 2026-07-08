@@ -1,7 +1,7 @@
 use std::vec;
 
 use crate::drawline::TGAColor;
-use crate::drawtriangle::{ DrawTriangleFloat, DrawTriangle };
+use crate::drawtriangle::{ DrawTriangle, DrawTriangleFill, DrawTriangleFloat };
 use crate::renderpipeline::{ ProjectionMode::ORTHO, ProjectionMode::PERSPECTIVE };
 use crate::tgaimage;
 use crate::tgaimage::TGAImage;
@@ -82,6 +82,8 @@ pub fn projection(
     }
 }
 
+
+
 impl<'a> RenderPipleline<'a> {
     pub fn new(framebuffer: &'a mut TGAImage) -> RenderPipleline {
         RenderPipleline {
@@ -98,6 +100,10 @@ impl<'a> RenderPipleline<'a> {
 
     pub fn remove_data(&mut self) {
         self.buffer = None;
+    }
+
+    pub fn set_draw_mode(&mut self,  mode: PolygonMode) {
+        self.polygon_mode = mode;
     }
 
     pub fn set_uniforms(&mut self, unforms: &'a Uniforms) {
@@ -173,7 +179,7 @@ impl<'a> RenderPipleline<'a> {
         if let (Some(p0), Some(p1), Some(p2)) = (p0, p1, p2) {
             match self.polygon_mode {
                     PolygonMode::FILL => {
-
+                        DrawTriangleFill::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
                     }
                     PolygonMode::LINE => {
                         // DrawTriangleFloat::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);

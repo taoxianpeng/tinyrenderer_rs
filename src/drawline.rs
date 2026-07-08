@@ -1,6 +1,6 @@
 pub use crate::datatype::Point2D;
 pub use crate::tgaimage::*;
-pub use glam::Vec2;
+pub use glam::{IVec2, Vec2};
 
 pub trait Drawline {
     fn draw(image: &mut TGAImage, p0: &Point2D, p1: &Point2D, c: &TGAColor);
@@ -65,7 +65,7 @@ impl DDA {
 pub struct Bresenham;
 
 impl Bresenham {
-    pub fn draw(image: &mut TGAImage, p0: &Point2D, p1: &Point2D, c: &TGAColor) {
+    pub fn draw(image: &mut TGAImage, p0: &IVec2, p1: &IVec2, c: &TGAColor) {
         let mut x0 = p0.x;
         let mut y0 = p0.y;
         let mut x1 = p1.x;
