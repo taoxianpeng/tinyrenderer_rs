@@ -5,14 +5,14 @@ mod model;
 mod tgaimage;
 mod renderpipeline;
 
-use std::path::Path;
+use std::{iter::Enumerate, path::Path};
 use tgaimage::{TGAColor, TGAImage, TGAImageType};
 use glam::{Mat3, Mat4, Vec2, Vec3};
 
 use model::Model;
 use renderpipeline::{RenderPipleline, VertexInput, Uniforms};
 
-use crate::renderpipeline::{lookat, projection};
+use crate::{drawline::{BLUE, GREEN, RED}, renderpipeline::{lookat, projection}};
 
 fn main() {
     // 1. 加载 OBJ 模型
@@ -29,14 +29,24 @@ fn main() {
     for face in model.faces() {
         // 只处理三角形面（通常 obj 导出时已三角化）
         if face.len() == 3 {
-            for idx in face {
+            for (index, idx) in face.iter().enumerate() {
                 let pos   = model.verts()[idx[0] as usize];
                 let normal = model.vert_normals()[idx[2] as usize];
                 let texcoord = {
                     let vt = model.texture_verts()[idx[1] as usize];
                     Vec2::new(vt.x, vt.y)
                 };
-                vertices.push(VertexInput { position: pos, normal, texcoord });
+                vertices.push(VertexInput { 
+                    position: pos, 
+                    color: match index {
+                        0 => { RED }
+                        1 => { GREEN }
+                        2 => { BLUE }
+                        _ => { TGAColor::default() }
+                    }, 
+                    normal, 
+                    texcoord 
+                });
             }
         }
     }
@@ -53,7 +63,7 @@ fn main() {
 
     // 把模型摆正：绕 X 轴旋转 -90°，使 OBJ 的 Y-up 转为 Z-up 的世界坐标系
     //（实际由 model matrix 控制，这里保持单位阵 + 调整 camera 位置即可）
-    let eye    = Vec3::new(1.0, 1.0, 2.5);
+    let eye    = Vec3::new(1.0, 0.0, 2.5);
     let center = Vec3::ZERO;
     let up     = Vec3::Y;
     let view_mat = lookat(&eye, &center, &up);

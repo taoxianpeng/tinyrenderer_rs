@@ -1,5 +1,5 @@
 use std::vec;
-
+use std::cmp::{max, min};
 use crate::drawline::TGAColor;
 use crate::drawtriangle::{ DrawTriangle, DrawTriangleFill, DrawTriangleFloat };
 use crate::renderpipeline::{ ProjectionMode::ORTHO, ProjectionMode::PERSPECTIVE };
@@ -69,8 +69,8 @@ pub fn projection(
         PERSPECTIVE => {
             let aspect_ratio = view_size.x / view_size.y;
             let tan_fov_div_2 = (fov / 2.0).tan();
-            let m_33 = (z_near + z_far) / (z_near - z_far);
-            let m_34 = -2.0 * z_near * z_far / (z_near - z_far);
+            let m_33 = -(z_near + z_far) / (z_far - z_near);
+            let m_34 = -2.0 * z_near * z_far / (z_far - z_near);
 
             Mat4::from_cols(
                 vec4(1.0 / (aspect_ratio * tan_fov_div_2), 0.0, 0.0, 0.0),
@@ -82,7 +82,30 @@ pub fn projection(
     }
 }
 
+fn max_3(a: i32, b: i32, c: i32) -> i32 {
+    max(max(a, b), c)
+}
 
+fn min_3(a: i32, b: i32, c: i32) -> i32 {
+    min(min(a, b), c)
+}
+
+fn is_top_left_edge(v_start: &IVec2, v_end: &IVec2) -> bool {
+    // 判断边是否是上边和左边
+    let edge = v_end - v_start;
+
+    // 上边界判断
+    if edge.y == 0 {
+        return edge.x < 0;
+    }
+
+    // 左边界判断
+    return edge.y < 0;
+}
+
+fn is_in_edge(p: &IVec2, v_start: &IVec2, v_end: &IVec2) -> bool {
+    return (p.x >= v_start.x && p.x <= v_end.x) && (p.y >= v_start.y && p.y <= v_end.y);
+}
 
 impl<'a> RenderPipleline<'a> {
     pub fn new(framebuffer: &'a mut TGAImage) -> RenderPipleline {
@@ -144,6 +167,7 @@ impl<'a> RenderPipleline<'a> {
     fn vertex_shader(&self, input: &VertexInput, uniforms: &Uniforms) -> VertexOutput {
         VertexOutput {
             position: uniforms.model_view_proj * input.position.extend(1.0),
+            color: input.color,
             normal: input.normal,
             texcoord: input.texcoord,
         }
@@ -176,10 +200,62 @@ impl<'a> RenderPipleline<'a> {
         let p0 = to_screen(&input.triangle[0].position);
         let p1 = to_screen(&input.triangle[1].position);
         let p2 = to_screen(&input.triangle[2].position);
+
+        let clr0 = &input.triangle[0].color;
+        let clr1 = &input.triangle[1].color;
+        let clr2 = &input.triangle[2].color;
+
         if let (Some(p0), Some(p1), Some(p2)) = (p0, p1, p2) {
             match self.polygon_mode {
                     PolygonMode::FILL => {
-                        DrawTriangleFill::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
+                        // DrawTriangleFill::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
+                        // 计算包围盒
+                        let x_min = min_3(p0.x, p1.x, p2.x);
+                        let x_max = max_3(p0.x, p1.x, p2.x);
+                        let y_min = min_3(p0.y, p1.y, p2.y);
+                        let y_max = max_3(p0.y, p1.y, p2.y);
+
+                        // 判断包围盒里像素是在三角形内还是外
+                        for x in x_min..=x_max {
+                            for y in y_min..=y_max {
+                                let p = IVec2::new(x, y);
+                                let c1 = (p1 - p0).perp_dot(p - p0);
+                                let c2 = (p2 - p1).perp_dot(p - p1);
+                                let c3 = (p0 - p2).perp_dot(p - p2);
+
+                                let mut render_flag = false;
+                                if (c1 > 0 && c2 > 0 && c3 > 0) || (c1 < 0 && c2 < 0 && c3 < 0) {
+                                    // image.set(p.x as usize, p.y as usize, c);
+                                    render_flag = true;
+                                }
+
+                                if c1 == 0 && is_top_left_edge(&p0, &p1) && is_in_edge(&p, &p0, &p1) {
+                                    render_flag = true;
+                                } else if c2 == 0 && is_top_left_edge(&p1, &p2) && is_in_edge(&p, &p1, &p2)
+                                {
+                                    render_flag = true;
+                                } else if c3 == 0 && is_top_left_edge(&p2, &p0) && is_in_edge(&p, &p2, &p0)
+                                {
+                                    render_flag = true;
+                                }
+
+                                if render_flag {
+                                    let aren = (c1 + c2 + c3) as f32;
+                                    let r1 =  (c2 as f32) / aren;
+                                    let r2 =  (c3 as f32) / aren;
+                                    let r3 =  (c1 as f32) / aren;
+
+                                    let color = TGAColor::new(
+                                        (r1 * clr0.r as f32 + r2 * clr1.r as f32 + r3 * clr2.r as f32) as u8,
+                                        (r1 * clr0.g as f32 + r2 * clr1.g as f32 + r3 * clr2.g as f32) as u8,
+                                        (r1 * clr0.b as f32 + r2 * clr1.b as f32 + r3 * clr2.b as f32) as u8,
+                                        (r1 * clr0.a as f32 + r2 * clr1.a as f32 + r3 * clr2.a as f32) as u8,
+                                    );
+
+                                    self.framebuffer.set(x as usize, y as usize, &color);
+                                }
+                            }
+                        }
                     }
                     PolygonMode::LINE => {
                         // DrawTriangleFloat::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
@@ -198,6 +274,7 @@ impl<'a> RenderPipleline<'a> {
 // 输入: 一个顶点的原始属性
 pub struct VertexInput {
     pub position: Vec3,
+    pub color: TGAColor,
     pub normal: Vec3,
     pub texcoord: Vec2,
 }
@@ -205,6 +282,7 @@ pub struct VertexInput {
 // 输出: 变换后的顶点数据，传递给下一个阶段
 struct VertexOutput {
     position: Vec4, // clip-space 位置 (必须)
+    color: TGAColor,
     normal: Vec3,
     texcoord: Vec2,
 }
