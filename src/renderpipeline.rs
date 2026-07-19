@@ -1,7 +1,7 @@
 use std::vec;
 use std::cmp::{max, min};
 use crate::drawline::TGAColor;
-use crate::drawtriangle::{ DrawTriangle, DrawTriangleFill, DrawTriangleFloat };
+use crate::drawtriangle::DrawTriangle;
 use crate::renderpipeline::{ ProjectionMode::ORTHO, ProjectionMode::PERSPECTIVE };
 use crate::tgaimage;
 use crate::tgaimage::TGAImage;
@@ -11,13 +11,6 @@ pub enum PolygonMode {
     FILL,
     LINE,
     Point,
-}
-
-pub struct RenderPipleline<'a> {
-    buffer: Option<&'a Vec<VertexInput>>,
-    uniforms: Option<&'a Uniforms<'a>>,
-    polygon_mode: PolygonMode,
-    framebuffer: &'a mut TGAImage,
 }
 
 pub fn lookat(eye: &Vec3, center: &Vec3, up: &Vec3) -> Mat4 {
@@ -107,13 +100,31 @@ fn is_in_edge(p: &IVec2, v_start: &IVec2, v_end: &IVec2) -> bool {
     return (p.x >= v_start.x && p.x <= v_end.x) && (p.y >= v_start.y && p.y <= v_end.y);
 }
 
+pub struct RenderPipleline<'a> {
+    buffer: Option<&'a Vec<VertexInput>>,
+    uniforms: Option<&'a Uniforms<'a>>,
+    polygon_mode: PolygonMode,
+    framebuffer: &'a mut TGAImage,
+    w: usize, 
+    h: usize,
+    depth_buffer: Vec<f32>,
+    color_buffer: Vec<TGAColor>,
+}
+
 impl<'a> RenderPipleline<'a> {
     pub fn new(framebuffer: &'a mut TGAImage) -> RenderPipleline {
+        let w = framebuffer.width();
+        let h = framebuffer.height();
+        let total_pixels = w * h;
         RenderPipleline {
             buffer: None,
             uniforms: None,
             polygon_mode: PolygonMode::LINE,
-            framebuffer: framebuffer,
+            framebuffer,
+            w,
+            h,
+            depth_buffer: vec![f32::MAX; total_pixels],
+            color_buffer: vec![TGAColor::new(0, 0, 0, 0); total_pixels],
         }
     }
 
@@ -152,15 +163,18 @@ impl<'a> RenderPipleline<'a> {
 
             // 后续管线阶段
             let primitives = self.primitive_assembly(primitive_array);
+            let mut fragment_inputs: Vec<FragmentInput> = Vec::new();
             for primitive in &primitives {
-                self.rasterization(primitive);
+                if let Some(mut fragments) = self.rasterization(primitive) {
+                    fragment_inputs.append(&mut fragments);
+                }
             }
 
-            if let Some(uniforms_) = self.uniforms {
-                self.fragment_shader(uniforms_);
+            if let Some(filtered_frags) = self.depth_test(fragment_inputs) {
+                self.fragment_shader(uniforms, filtered_frags);
             }
 
-            self.depth_test();
+            self.raster_operations();
         }
     }
 
@@ -181,9 +195,11 @@ impl<'a> RenderPipleline<'a> {
         out
     }
 
-    fn rasterization(&mut self, input: &PrimitiveOutput) {
-        let w = self.framebuffer.width() as f32;
-        let h = self.framebuffer.height() as f32;
+    fn rasterization(&mut self, input: &PrimitiveOutput) -> Option<Vec<FragmentInput>>{
+        let w = self.w as f32;
+        let h = self.h as f32;
+
+        let mut fragments: Vec<FragmentInput> = Vec::new();
 
         // clip-space → NDC（透视除法）→ 屏幕空间
         let to_screen = |pos: &Vec4| -> Option<IVec2> {
@@ -204,6 +220,18 @@ impl<'a> RenderPipleline<'a> {
         let clr0 = &input.triangle[0].color;
         let clr1 = &input.triangle[1].color;
         let clr2 = &input.triangle[2].color;
+
+        let d0 = &input.triangle[0].position.z;
+        let d1 = &input.triangle[1].position.z;
+        let d2 = &input.triangle[2].position.z;
+
+        let n0 = &input.triangle[0].normal;
+        let n1 = &input.triangle[1].normal;
+        let n2 = &input.triangle[2].normal;
+
+        let tc0 = &input.triangle[0].texcoord;
+        let tc1 = &input.triangle[1].texcoord;
+        let tc2 = &input.triangle[2].texcoord;
 
         if let (Some(p0), Some(p1), Some(p2)) = (p0, p1, p2) {
             match self.polygon_mode {
@@ -252,10 +280,24 @@ impl<'a> RenderPipleline<'a> {
                                         (r1 * clr0.a as f32 + r2 * clr1.a as f32 + r3 * clr2.a as f32) as u8,
                                     );
 
-                                    self.framebuffer.set(x as usize, y as usize, &color);
+                                    let depth = r1 * d0 + r2 * d1 + r3 * d2;
+                                    let normal = r1 * *n0 + r2 * *n1 + r3 * *n2;
+                                    let texcoord = r1 * *tc0 + r2 * *tc1 + r3 * *tc2;
+
+                                    // self.framebuffer.set(x as usize, y as usize, &color);
+                                    let frag = FragmentInput {
+                                        pos: IVec2 { x, y },
+                                        depth,
+                                        color,
+                                        normal,
+                                        texcoord,
+                                    };
+                                    fragments.push(frag);
                                 }
                             }
                         }
+
+                        return Some(fragments);
                     }
                     PolygonMode::LINE => {
                         // DrawTriangleFloat::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
@@ -264,11 +306,48 @@ impl<'a> RenderPipleline<'a> {
                     PolygonMode::Point => {}
                 }
         }
+        return None
     }
 
-    fn fragment_shader(&mut self, uniforms: &Uniforms) {}
+    fn depth_test(&mut self, frags: Vec<FragmentInput>) -> Option<Vec<FragmentInput>> {
+        let w = self.w;
+        let depth_buffer = &mut self.depth_buffer;
+        let result: Vec<FragmentInput> = frags
+            .into_iter()
+            .filter(|frag| {
+                let idx = frag.pos.y as usize * w + frag.pos.x as usize;
+                if frag.depth < depth_buffer[idx] {
+                    depth_buffer[idx] = frag.depth;
+                    true
+                } else {
+                    false
+                }
+            })
+            .collect();
 
-    fn depth_test(&mut self) {}
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    fn fragment_shader(&mut self, _uniforms: &Uniforms, frags: Vec<FragmentInput>) {
+        for frag in frags {
+            let i = frag.pos.y as usize * self.w + frag.pos.x as usize;
+            self.color_buffer[i] = frag.color;
+        }
+    }
+
+    fn raster_operations(&mut self) {
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let index = y * self.w + x;
+                let c = self.color_buffer[index];
+                self.framebuffer.set(x, y, &c);
+            }
+        }
+    }
 }
 
 // 输入: 一个顶点的原始属性
@@ -285,6 +364,15 @@ struct VertexOutput {
     color: TGAColor,
     normal: Vec3,
     texcoord: Vec2,
+}
+
+#[derive(Default)]
+struct FragmentInput {
+    pub pos: IVec2,
+    pub depth: f32,
+    pub color: TGAColor,
+    pub normal: Vec3,
+    pub texcoord: Vec2,
 }
 
 struct PrimitiveOutput {
