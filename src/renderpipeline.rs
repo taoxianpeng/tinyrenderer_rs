@@ -1,11 +1,11 @@
-use std::vec;
-use std::cmp::{max, min};
 use crate::drawline::TGAColor;
 use crate::drawtriangle::DrawTriangle;
-use crate::renderpipeline::{ ProjectionMode::ORTHO, ProjectionMode::PERSPECTIVE };
+use crate::renderpipeline::{ProjectionMode::ORTHO, ProjectionMode::PERSPECTIVE};
 use crate::tgaimage;
 use crate::tgaimage::TGAImage;
-use glam::{ Mat3, Mat4, Vec2, IVec2, Vec3, Vec4, vec4};
+use glam::{IVec2, Mat3, Mat4, Vec2, Vec3, Vec4, vec4};
+use std::cmp::{max, min};
+use std::vec;
 
 pub enum PolygonMode {
     FILL,
@@ -104,8 +104,9 @@ pub struct RenderPipleline<'a> {
     buffer: Option<&'a Vec<VertexInput>>,
     uniforms: Option<&'a Uniforms<'a>>,
     polygon_mode: PolygonMode,
+    flat_normal: bool,
     framebuffer: &'a mut TGAImage,
-    w: usize, 
+    w: usize,
     h: usize,
     depth_buffer: Vec<f32>,
     color_buffer: Vec<TGAColor>,
@@ -120,6 +121,7 @@ impl<'a> RenderPipleline<'a> {
             buffer: None,
             uniforms: None,
             polygon_mode: PolygonMode::LINE,
+            flat_normal: false,
             framebuffer,
             w,
             h,
@@ -136,12 +138,16 @@ impl<'a> RenderPipleline<'a> {
         self.buffer = None;
     }
 
-    pub fn set_draw_mode(&mut self,  mode: PolygonMode) {
+    pub fn set_draw_mode(&mut self, mode: PolygonMode) {
         self.polygon_mode = mode;
     }
 
     pub fn set_uniforms(&mut self, unforms: &'a Uniforms) {
         self.uniforms = Some(unforms);
+    }
+
+    pub fn set_flat_normal(&mut self, enable: bool) {
+        self.flat_normal = enable;
     }
 
     pub fn draw(&mut self) {
@@ -159,6 +165,26 @@ impl<'a> RenderPipleline<'a> {
                 let v2 = self.vertex_shader(&chunk[2], uniforms);
 
                 primitive_array.push([v0, v1, v2]);
+            }
+
+            // flat normal: 如果开启，将每个三角形三个顶点的法线统一为平均值
+            if self.flat_normal {
+                for tri in primitive_array.iter_mut() {
+                    let avg = match (
+                        &tri[0].varyings[1],
+                        &tri[1].varyings[1],
+                        &tri[2].varyings[1],
+                    ) {
+                        (Varying::Vec3(a), Varying::Vec3(b), Varying::Vec3(c)) => {
+                            (*a + *b + *c).normalize()
+                        }
+                        _ => unreachable!("second varying must be normal"),
+                    };
+                    let flat = Varying::Vec3(avg);
+                    tri[0].varyings[1] = flat;
+                    tri[1].varyings[1] = flat;
+                    tri[2].varyings[1] = flat;
+                }
             }
 
             // 后续管线阶段
@@ -179,12 +205,9 @@ impl<'a> RenderPipleline<'a> {
     }
 
     fn vertex_shader(&self, input: &VertexInput, uniforms: &Uniforms) -> VertexOutput {
-        VertexOutput {
-            position: uniforms.model_view_proj * input.position.extend(1.0),
-            color: input.color,
-            normal: input.normal,
-            texcoord: input.texcoord,
-        }
+        let pos = uniforms.model_view_proj * input.pos.extend(1.0);
+        let varyings = input.varyings.clone();
+        VertexOutput { pos, varyings }
     }
 
     fn primitive_assembly(&self, input: Vec<[VertexOutput; 3]>) -> Vec<PrimitiveOutput> {
@@ -195,7 +218,7 @@ impl<'a> RenderPipleline<'a> {
         out
     }
 
-    fn rasterization(&mut self, input: &PrimitiveOutput) -> Option<Vec<FragmentInput>>{
+    fn rasterization(&mut self, input: &PrimitiveOutput) -> Option<Vec<FragmentInput>> {
         let w = self.w as f32;
         let h = self.h as f32;
 
@@ -213,102 +236,86 @@ impl<'a> RenderPipleline<'a> {
             ))
         };
 
-        let p0 = to_screen(&input.triangle[0].position);
-        let p1 = to_screen(&input.triangle[1].position);
-        let p2 = to_screen(&input.triangle[2].position);
+        let p0 = to_screen(&input.triangle[0].pos);
+        let p1 = to_screen(&input.triangle[1].pos);
+        let p2 = to_screen(&input.triangle[2].pos);
 
-        let clr0 = &input.triangle[0].color;
-        let clr1 = &input.triangle[1].color;
-        let clr2 = &input.triangle[2].color;
+        let w0_clip = input.triangle[0].pos.w;
+        let w1_clip = input.triangle[1].pos.w;
+        let w2_clip = input.triangle[2].pos.w;
 
-        let w0_clip = input.triangle[0].position.w;
-        let w1_clip = input.triangle[1].position.w;
-        let w2_clip = input.triangle[2].position.w;
+        let d0 = input.triangle[0].pos.z;
+        let d1 = input.triangle[1].pos.z;
+        let d2 = input.triangle[2].pos.z;
 
-        let d0 = input.triangle[0].position.z;
-        let d1 = input.triangle[1].position.z;
-        let d2 = input.triangle[2].position.z;
-
-        let n0 = input.triangle[0].normal;
-        let n1 = input.triangle[1].normal;
-        let n2 = input.triangle[2].normal;
-
-        let tc0 = input.triangle[0].texcoord;
-        let tc1 = input.triangle[1].texcoord;
-        let tc2 = input.triangle[2].texcoord;
+        let varyings0 = &input.triangle[0].varyings;
+        let varyings1 = &input.triangle[1].varyings;
+        let varyings2 = &input.triangle[2].varyings;
 
         if let (Some(p0), Some(p1), Some(p2)) = (p0, p1, p2) {
             match self.polygon_mode {
-                    PolygonMode::FILL => {
-                        // DrawTriangleFill::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
-                        // 计算包围盒
-                        let x_min = min_3(p0.x, p1.x, p2.x);
-                        let x_max = max_3(p0.x, p1.x, p2.x);
-                        let y_min = min_3(p0.y, p1.y, p2.y);
-                        let y_max = max_3(p0.y, p1.y, p2.y);
+                PolygonMode::FILL => {
+                    // DrawTriangleFill::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
+                    // 计算包围盒
+                    let x_min = min_3(p0.x, p1.x, p2.x);
+                    let x_max = max_3(p0.x, p1.x, p2.x);
+                    let y_min = min_3(p0.y, p1.y, p2.y);
+                    let y_max = max_3(p0.y, p1.y, p2.y);
 
-                        // 判断包围盒里像素是在三角形内还是外
-                        let eps = 1e-6f32;
-                        let p0_f = Vec2::new(p0.x as f32, p0.y as f32);
-                        let p1_f = Vec2::new(p1.x as f32, p1.y as f32);
-                        let p2_f = Vec2::new(p2.x as f32, p2.y as f32);
-                        let area = (p1_f - p0_f).perp_dot(p2_f - p0_f);
+                    // 判断包围盒里像素是在三角形内还是外
+                    let eps = 1e-6f32;
+                    let p0_f = Vec2::new(p0.x as f32, p0.y as f32);
+                    let p1_f = Vec2::new(p1.x as f32, p1.y as f32);
+                    let p2_f = Vec2::new(p2.x as f32, p2.y as f32);
+                    let area = (p1_f - p0_f).perp_dot(p2_f - p0_f);
 
-                        if area.abs() < eps {
-                            return None;
-                        }
+                    if area.abs() < eps {
+                        return None;
+                    }
 
-                        for x in x_min..=x_max {
-                            for y in y_min..=y_max {
-                                let p_center = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
-                                let w0 = ((p1_f - p0_f).perp_dot(p_center - p0_f)) / area;
-                                let w1 = ((p2_f - p1_f).perp_dot(p_center - p1_f)) / area;
-                                let w2 = ((p0_f - p2_f).perp_dot(p_center - p2_f)) / area;
+                    for x in x_min..=x_max {
+                        for y in y_min..=y_max {
+                            let p_center = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                            let w0 = ((p1_f - p0_f).perp_dot(p_center - p0_f)) / area;
+                            let w1 = ((p2_f - p1_f).perp_dot(p_center - p1_f)) / area;
+                            let w2 = ((p0_f - p2_f).perp_dot(p_center - p2_f)) / area;
 
-                                if w0 >= -eps && w1 >= -eps && w2 >= -eps {
-                                    let inv_w0 = 1.0 / w0_clip;
-                                    let inv_w1 = 1.0 / w1_clip;
-                                    let inv_w2 = 1.0 / w2_clip;
+                            if w0 >= -eps && w1 >= -eps && w2 >= -eps {
+                                let inv_w0 = 1.0 / w0_clip;
+                                let inv_w1 = 1.0 / w1_clip;
+                                let inv_w2 = 1.0 / w2_clip;
 
-                                    let denom = w0 * inv_w0 + w1 * inv_w1 + w2 * inv_w2;
-                                    let r1 = (w0 * inv_w0) / denom;
-                                    let r2 = (w1 * inv_w1) / denom;
-                                    let r3 = (w2 * inv_w2) / denom;
+                                let denom = w0 * inv_w0 + w1 * inv_w1 + w2 * inv_w2;
+                                let r1 = (w0 * inv_w0) / denom;
+                                let r2 = (w1 * inv_w1) / denom;
+                                let r3 = (w2 * inv_w2) / denom;
 
-                                    let color = TGAColor::new(
-                                        r1 * clr0.r + r2 * clr1.r + r3 * clr2.r,
-                                        r1 * clr0.g + r2 * clr1.g + r3 * clr2.g,
-                                        r1 * clr0.b + r2 * clr1.b + r3 * clr2.b,
-                                        r1 * clr0.a + r2 * clr1.a + r3 * clr2.a,
-                                    );
+                                let depth = r1 * d0 + r2 * d1 + r3 * d2;
 
-                                    let depth = r1 * d0 + r2 * d1 + r3 * d2;
-                                    let normal = r1 * n0 + r2 * n1 + r3 * n2;
-                                    let texcoord = r1 * tc0 + r2 * tc1 + r3 * tc2;
+                                let interpolated_varyings = interpolate_varyings(
+                                    &varyings0, &varyings1, &varyings2, r1, r2, r3,
+                                );
 
-                                    // self.framebuffer.set(x as usize, y as usize, &color);
-                                    let frag = FragmentInput {
-                                        pos: IVec2 { x, y },
-                                        depth,
-                                        color,
-                                        normal,
-                                        texcoord,
-                                    };
-                                    fragments.push(frag);
-                                }
+                                let frag = FragmentInput {
+                                    pos: IVec2 { x, y },
+                                    depth,
+                                    varyings: interpolated_varyings,
+                                };
+                                fragments.push(frag);
                             }
                         }
+                    }
 
-                        return Some(fragments);
-                    }
-                    PolygonMode::LINE => {
-                        // DrawTriangleFloat::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
-                        DrawTriangle::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
-                    }
-                    PolygonMode::Point => {}
+                    return Some(fragments);
                 }
+                PolygonMode::LINE => {
+                    // DrawTriangleFloat::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
+                    DrawTriangle::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
+                }
+                PolygonMode::Point => {}
+            }
         }
-        return None
+        return None;
     }
 
     fn depth_test(&mut self, frags: Vec<FragmentInput>) -> Option<Vec<FragmentInput>> {
@@ -338,24 +345,33 @@ impl<'a> RenderPipleline<'a> {
         for frag in frags {
             let i = frag.pos.y as usize * self.w + frag.pos.x as usize;
 
+            let color = match frag.varyings[0] {
+                Varying::Color(color) => color,
+                _ => unreachable!("first varying must be color"),
+            };
+            let normal = match frag.varyings[1] {
+                Varying::Vec3(normal) => normal,
+                _ => unreachable!("second varying must be normal"),
+            };
+
             let ambient_light_strength = 0.1;
             let ambient = ambient_light_strength * uniforms.ambient_color;
 
-            let diff = f32::max(frag.normal.dot(uniforms.light_dir), 0.0);
+            let diff = f32::max(normal.dot(uniforms.light_dir), 0.0);
             let diffuse = diff * uniforms.ambient_color;
 
-            let specular_light_strength = 0.5;
+            let specular_light_strength = 1.0;
             let halfway_dir = (uniforms.light_dir + uniforms.view_dir).normalize();
-            let spec = f32::powi(f32::max(frag.normal.dot(halfway_dir), 0.0), 32);
+            let spec = f32::powi(f32::max(normal.dot(halfway_dir), 0.0), 32);
             let specular = specular_light_strength * spec * uniforms.ambient_color;
 
-            let rate = ambient + diffuse + specular; 
+            let rate = ambient + diffuse + specular;
 
             let lit_color = TGAColor::new(
-                rate.x * frag.color.r,
-                rate.y * frag.color.g,
-                rate.z * frag.color.b,
-                frag.color.a,
+                rate.x * color.r,
+                rate.y * color.g,
+                rate.z * color.b,
+                color.a,
             );
             self.color_buffer[i] = lit_color;
         }
@@ -374,27 +390,74 @@ impl<'a> RenderPipleline<'a> {
 
 // 输入: 一个顶点的原始属性
 pub struct VertexInput {
-    pub position: Vec3,
-    pub color: TGAColor,
-    pub normal: Vec3,
-    pub texcoord: Vec2,
+    pub pos: Vec3,
+    pub varyings: Vec<Varying>,
 }
 
-// 输出: 变换后的顶点数据，传递给下一个阶段
+#[derive(Clone, Debug)]
 struct VertexOutput {
-    position: Vec4, // clip-space 位置 (必须)
-    color: TGAColor,
-    normal: Vec3,
-    texcoord: Vec2,
+    pos: Vec4,
+    varyings: Vec<Varying>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Varying {
+    Float(f32),
+    Vec2(Vec2),
+    Vec3(Vec3),
+    Vec4(Vec4),
+    Color(TGAColor),
+}
+
+impl Varying {
+    fn interpolate(a: Varying, b: Varying, c: Varying, r1: f32, r2: f32, r3: f32) -> Varying {
+        match (a, b, c) {
+            (Varying::Float(a), Varying::Float(b), Varying::Float(c)) => {
+                Varying::Float(a * r1 + b * r2 + c * r3)
+            }
+            (Varying::Vec2(a), Varying::Vec2(b), Varying::Vec2(c)) => {
+                Varying::Vec2(a * r1 + b * r2 + c * r3)
+            }
+            (Varying::Vec3(a), Varying::Vec3(b), Varying::Vec3(c)) => {
+                Varying::Vec3(a * r1 + b * r2 + c * r3)
+            }
+            (Varying::Vec4(a), Varying::Vec4(b), Varying::Vec4(c)) => {
+                Varying::Vec4(a * r1 + b * r2 + c * r3)
+            }
+            (Varying::Color(a), Varying::Color(b), Varying::Color(c)) => {
+                Varying::Color(TGAColor::new(
+                    a.r * r1 + b.r * r2 + c.r * r3,
+                    a.g * r1 + b.g * r2 + c.g * r3,
+                    a.b * r1 + b.b * r2 + c.b * r3,
+                    a.a * r1 + b.a * r2 + c.a * r3,
+                ))
+            }
+            _ => unreachable!("interpolation type mismatch"),
+        }
+    }
+}
+
+fn interpolate_varyings(
+    varyings0: &[Varying],
+    varyings1: &[Varying],
+    varyings2: &[Varying],
+    r1: f32,
+    r2: f32,
+    r3: f32,
+) -> Vec<Varying> {
+    varyings0
+        .iter()
+        .zip(varyings1.iter())
+        .zip(varyings2.iter())
+        .map(|((a, b), c)| Varying::interpolate(*a, *b, *c, r1, r2, r3))
+        .collect()
 }
 
 #[derive(Default)]
 struct FragmentInput {
     pub pos: IVec2,
     pub depth: f32,
-    pub color: TGAColor,
-    pub normal: Vec3,
-    pub texcoord: Vec2,
+    pub varyings: Vec<Varying>,
 }
 
 struct PrimitiveOutput {
@@ -412,7 +475,7 @@ pub struct Uniforms<'a> {
 
     // ---- 材质参数 ----
     pub light_dir: Vec3,      // 光照方向
-    pub view_dir: Vec3,     // 视角方向
+    pub view_dir: Vec3,       // 视角方向
     pub ambient_color: Vec3,  // 环境光颜色
     pub diffuse_color: Vec3,  // 漫反射颜色
     pub specular_color: Vec3, // 高光颜色

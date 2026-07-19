@@ -37,11 +37,13 @@ fn main() {
                     let vt = model.texture_verts()[idx[1] as usize];
                     Vec2::new(vt.x, vt.y)
                 };
-                vertices.push(VertexInput { 
-                    position: pos, 
-                    color: WHITE,
-                    normal, 
-                    texcoord 
+                vertices.push(VertexInput {
+                    pos,
+                    varyings: vec![
+                        renderpipeline::Varying::Color(WHITE),
+                        renderpipeline::Varying::Vec3(normal),
+                        renderpipeline::Varying::Vec2(texcoord),
+                    ],
                 });
             }
         }
@@ -104,6 +106,7 @@ fn main() {
     // 5. 运行渲染管线
     let mut pipeline = RenderPipleline::new(&mut framebuffer);
     pipeline.add_data(&vertices);
+    pipeline.set_flat_normal(true);
     pipeline.set_uniforms(&uniforms);
     pipeline.set_draw_mode(renderpipeline::PolygonMode::FILL);
     pipeline.draw();
