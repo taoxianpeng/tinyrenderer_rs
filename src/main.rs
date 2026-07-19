@@ -5,18 +5,19 @@ mod model;
 mod tgaimage;
 mod renderpipeline;
 
-use std::{iter::Enumerate, path::Path};
+use std::{path::Path};
 use tgaimage::{TGAColor, TGAImage, TGAImageType};
 use glam::{Mat3, Mat4, Vec2, Vec3};
 
 use model::Model;
 use renderpipeline::{RenderPipleline, VertexInput, Uniforms};
 
-use crate::{drawline::{BLUE, GREEN, RED}, renderpipeline::{lookat, projection}};
+use crate::{drawline::{BLUE, GREEN, RED, WHITE, BLACK}, renderpipeline::{lookat, projection}};
 
 fn main() {
     // 1. 加载 OBJ 模型
-    let model: Model = Model::new(Path::new("assert/diablo3_pose.obj"));
+    // let model: Model = Model::new(Path::new("assert/diablo3_pose.obj"));
+    let model: Model = Model::new(Path::new("assert/african_head.obj"));
     println!(
         "模型加载成功: {} 顶点, {} 面",
         model.verts().len() - 1,
@@ -29,7 +30,7 @@ fn main() {
     for face in model.faces() {
         // 只处理三角形面（通常 obj 导出时已三角化）
         if face.len() == 3 {
-            for (index, idx) in face.iter().enumerate() {
+            for idx in face {
                 let pos   = model.verts()[idx[0] as usize];
                 let normal = model.vert_normals()[idx[2] as usize];
                 let texcoord = {
@@ -38,12 +39,7 @@ fn main() {
                 };
                 vertices.push(VertexInput { 
                     position: pos, 
-                    color: match index {
-                        0 => { RED }
-                        1 => { GREEN }
-                        2 => { BLUE }
-                        _ => { TGAColor::default() }
-                    }, 
+                    color: WHITE,
                     normal, 
                     texcoord 
                 });
@@ -56,7 +52,12 @@ fn main() {
     let width  = 800;
     let height = 800;
     let mut framebuffer = TGAImage::new(width, height, TGAImageType::RGB);
-    framebuffer.set_background_color(&TGAColor { r: 30, g: 30, b: 30, a: 255 });
+    framebuffer.set_background_color(&TGAColor {
+        r: 30.0 / 255.0,
+        g: 30.0 / 255.0,
+        b: 30.0 / 255.0,
+        a: 1.0,
+    });
 
     // 4. 设置相机 / 投影变换
     let model_mat = Mat4::IDENTITY;
@@ -89,9 +90,9 @@ fn main() {
         model_view,
         model_view_proj,
         normal_matrix,
-        light_dir:      Vec3::new(0.0, 0.0, -1.0).normalize(),
-        camera_pos:     eye,
-        ambient_color:  Vec3::new(0.1, 0.1, 0.1),
+        light_dir:      Vec3::new(-1.0, 1.0, 1.0).normalize(),
+        view_dir:     eye,
+        ambient_color:  Vec3::new(0.5, 0.5, 0.5), // 环境光颜色
         diffuse_color:  Vec3::new(0.7, 0.7, 0.7),
         specular_color: Vec3::new(0.3, 0.3, 0.3),
         diffuse_tex:    None,

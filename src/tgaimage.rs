@@ -3,12 +3,40 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use glam::Vec3;
+
 const MAX_CHUNK_LENGTH: u8 = 128;
 
-pub const RED: TGAColor = TGAColor{r: 255, g: 0, b: 0, a: 255};
-pub const GREEN: TGAColor = TGAColor{r: 0, g: 255, b: 0, a: 255};
-pub const BLUE: TGAColor = TGAColor{r: 0, g: 0, b: 255, a: 255};
-
+pub const RED: TGAColor = TGAColor {
+    r: 1.0,
+    g: 0.0,
+    b: 0.0,
+    a: 1.0,
+};
+pub const GREEN: TGAColor = TGAColor {
+    r: 0.0,
+    g: 1.0,
+    b: 0.0,
+    a: 1.0,
+};
+pub const BLUE: TGAColor = TGAColor {
+    r: 0.0,
+    g: 0.0,
+    b: 1.0,
+    a: 1.0,
+};
+pub const WHITE: TGAColor = TGAColor {
+    r: 1.0,
+    g: 1.0,
+    b: 1.0,
+    a: 1.0,
+};
+pub const BLACK: TGAColor = TGAColor {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 1.0,
+};
 #[derive(Debug)]
 pub enum TgaError {
     Io(io::Error),
@@ -23,14 +51,17 @@ pub enum TGAImageType {
     RGBA = 4,
 }
 
-
 impl fmt::Display for TgaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TgaError::Io(e) => write!(f, "I/O error: {}", e),
             TgaError::BadHeader(msg) => write!(f, "Invalid TGA header: {}", msg),
             TgaError::UnsupportedFormat(code) => {
-                write!(f, "Unsupported TGA format (data type code {}). Only 2, 3, 10, 11 are supported.", code)
+                write!(
+                    f,
+                    "Unsupported TGA format (data type code {}). Only 2, 3, 10, 11 are supported.",
+                    code
+                )
             }
             TgaError::BadData(msg) => write!(f, "Corrupt TGA data: {}", msg),
         }
@@ -62,21 +93,34 @@ struct TgaHeader {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TGAColor {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8,
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
 }
 
 impl TGAColor {
-    pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+    pub const fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
         TGAColor { r, g, b, a }
+    }
+
+    pub fn to_RGB(&self) -> Vec3 {
+        Vec3::new(self.r, self.g, self.b)
+    }
+
+    pub fn to_RGBA(&self) -> glam::f32::Vec4 {
+        glam::f32::Vec4::new(self.r, self.g, self.b, self.a)
     }
 }
 
 impl Default for TGAColor {
     fn default() -> Self {
-        TGAColor { r: 0, g: 0, b: 0, a: 0 }
+        TGAColor {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        }
     }
 }
 
@@ -131,16 +175,16 @@ impl TGAImage {
         let idx = (x + y * self.w) * self.bpp as usize;
         let mut c = TGAColor::default();
         if self.bpp > 0 {
-            c.b = self.data[idx];
+            c.b = self.data[idx] as f32 / 255.0;
         }
         if self.bpp > 1 {
-            c.g = self.data[idx + 1];
+            c.g = self.data[idx + 1] as f32 / 255.0;
         }
         if self.bpp > 2 {
-            c.r = self.data[idx + 2];
+            c.r = self.data[idx + 2] as f32 / 255.0;
         }
         if self.bpp > 3 {
-            c.a = self.data[idx + 3];
+            c.a = self.data[idx + 3] as f32 / 255.0;
         }
         Some(c)
     }
@@ -151,16 +195,16 @@ impl TGAImage {
         }
         let idx = (x + y * self.w) * self.bpp as usize;
         if self.bpp > 0 {
-            self.data[idx] = c.b;
+            self.data[idx] = (c.b.clamp(0.0, 1.0) * 255.0).round() as u8;
         }
         if self.bpp > 1 {
-            self.data[idx + 1] = c.g;
+            self.data[idx + 1] = (c.g.clamp(0.0, 1.0) * 255.0).round() as u8;
         }
         if self.bpp > 2 {
-            self.data[idx + 2] = c.r;
+            self.data[idx + 2] = (c.r.clamp(0.0, 1.0) * 255.0).round() as u8;
         }
         if self.bpp > 3 {
-            self.data[idx + 3] = c.a;
+            self.data[idx + 3] = (c.a.clamp(0.0, 1.0) * 255.0).round() as u8;
         }
     }
 
@@ -169,7 +213,8 @@ impl TGAImage {
 
         let mut header_bytes = [0u8; 18];
         file.read_exact(&mut header_bytes)?;
-        let header: TgaHeader = unsafe { std::ptr::read(header_bytes.as_ptr() as *const TgaHeader) };
+        let header: TgaHeader =
+            unsafe { std::ptr::read(header_bytes.as_ptr() as *const TgaHeader) };
 
         if header.data_type_code != 2
             && header.data_type_code != 3
@@ -392,7 +437,7 @@ impl TGAImage {
 mod tests {
     use crate::tgaimage::TGAImageType::Grayscale;
 
-use super::*;
+    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -615,7 +660,8 @@ use super::*;
 
     #[test]
     fn test_read_nonexistent_file() {
-        let result = TGAImage::new(1, 1, TGAImageType::RGBA).read_tga_file("/nonexistent/path/file.tga");
+        let result =
+            TGAImage::new(1, 1, TGAImageType::RGBA).read_tga_file("/nonexistent/path/file.tga");
         assert!(result.is_err());
     }
 

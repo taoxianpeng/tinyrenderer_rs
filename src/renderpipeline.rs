@@ -112,7 +112,7 @@ pub struct RenderPipleline<'a> {
 }
 
 impl<'a> RenderPipleline<'a> {
-    pub fn new(framebuffer: &'a mut TGAImage) -> RenderPipleline {
+    pub fn new(framebuffer: &'a mut TGAImage) -> RenderPipleline<'a> {
         let w = framebuffer.width();
         let h = framebuffer.height();
         let total_pixels = w * h;
@@ -124,7 +124,7 @@ impl<'a> RenderPipleline<'a> {
             w,
             h,
             depth_buffer: vec![f32::MAX; total_pixels],
-            color_buffer: vec![TGAColor::new(0, 0, 0, 0); total_pixels],
+            color_buffer: vec![TGAColor::new(0.0, 0.0, 0.0, 0.0); total_pixels],
         }
     }
 
@@ -208,8 +208,8 @@ impl<'a> RenderPipleline<'a> {
             }
             let ndc = pos.truncate() / pos.w; // 透视除法 → NDC [-1,1]
             Some(IVec2::new(
-                ((ndc.x + 1.0) * 0.5 * w).round() as i32, // x: [-1,1] → [0,width]
-                ((1.0 - ndc.y) * 0.5 * h).round() as i32, // y: [-1,1] → [0,height]，翻转 Y
+                ((ndc.x + 1.0) * 0.5 * w - 0.5).floor() as i32,
+                ((1.0 - ndc.y) * 0.5 * h - 0.5).floor() as i32,
             ))
         };
 
@@ -221,17 +221,21 @@ impl<'a> RenderPipleline<'a> {
         let clr1 = &input.triangle[1].color;
         let clr2 = &input.triangle[2].color;
 
-        let d0 = &input.triangle[0].position.z;
-        let d1 = &input.triangle[1].position.z;
-        let d2 = &input.triangle[2].position.z;
+        let w0_clip = input.triangle[0].position.w;
+        let w1_clip = input.triangle[1].position.w;
+        let w2_clip = input.triangle[2].position.w;
 
-        let n0 = &input.triangle[0].normal;
-        let n1 = &input.triangle[1].normal;
-        let n2 = &input.triangle[2].normal;
+        let d0 = input.triangle[0].position.z;
+        let d1 = input.triangle[1].position.z;
+        let d2 = input.triangle[2].position.z;
 
-        let tc0 = &input.triangle[0].texcoord;
-        let tc1 = &input.triangle[1].texcoord;
-        let tc2 = &input.triangle[2].texcoord;
+        let n0 = input.triangle[0].normal;
+        let n1 = input.triangle[1].normal;
+        let n2 = input.triangle[2].normal;
+
+        let tc0 = input.triangle[0].texcoord;
+        let tc1 = input.triangle[1].texcoord;
+        let tc2 = input.triangle[2].texcoord;
 
         if let (Some(p0), Some(p1), Some(p2)) = (p0, p1, p2) {
             match self.polygon_mode {
@@ -244,45 +248,43 @@ impl<'a> RenderPipleline<'a> {
                         let y_max = max_3(p0.y, p1.y, p2.y);
 
                         // 判断包围盒里像素是在三角形内还是外
+                        let eps = 1e-6f32;
+                        let p0_f = Vec2::new(p0.x as f32, p0.y as f32);
+                        let p1_f = Vec2::new(p1.x as f32, p1.y as f32);
+                        let p2_f = Vec2::new(p2.x as f32, p2.y as f32);
+                        let area = (p1_f - p0_f).perp_dot(p2_f - p0_f);
+
+                        if area.abs() < eps {
+                            return None;
+                        }
+
                         for x in x_min..=x_max {
                             for y in y_min..=y_max {
-                                let p = IVec2::new(x, y);
-                                let c1 = (p1 - p0).perp_dot(p - p0);
-                                let c2 = (p2 - p1).perp_dot(p - p1);
-                                let c3 = (p0 - p2).perp_dot(p - p2);
+                                let p_center = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                                let w0 = ((p1_f - p0_f).perp_dot(p_center - p0_f)) / area;
+                                let w1 = ((p2_f - p1_f).perp_dot(p_center - p1_f)) / area;
+                                let w2 = ((p0_f - p2_f).perp_dot(p_center - p2_f)) / area;
 
-                                let mut render_flag = false;
-                                if (c1 > 0 && c2 > 0 && c3 > 0) || (c1 < 0 && c2 < 0 && c3 < 0) {
-                                    // image.set(p.x as usize, p.y as usize, c);
-                                    render_flag = true;
-                                }
+                                if w0 >= -eps && w1 >= -eps && w2 >= -eps {
+                                    let inv_w0 = 1.0 / w0_clip;
+                                    let inv_w1 = 1.0 / w1_clip;
+                                    let inv_w2 = 1.0 / w2_clip;
 
-                                if c1 == 0 && is_top_left_edge(&p0, &p1) && is_in_edge(&p, &p0, &p1) {
-                                    render_flag = true;
-                                } else if c2 == 0 && is_top_left_edge(&p1, &p2) && is_in_edge(&p, &p1, &p2)
-                                {
-                                    render_flag = true;
-                                } else if c3 == 0 && is_top_left_edge(&p2, &p0) && is_in_edge(&p, &p2, &p0)
-                                {
-                                    render_flag = true;
-                                }
-
-                                if render_flag {
-                                    let aren = (c1 + c2 + c3) as f32;
-                                    let r1 =  (c2 as f32) / aren;
-                                    let r2 =  (c3 as f32) / aren;
-                                    let r3 =  (c1 as f32) / aren;
+                                    let denom = w0 * inv_w0 + w1 * inv_w1 + w2 * inv_w2;
+                                    let r1 = (w0 * inv_w0) / denom;
+                                    let r2 = (w1 * inv_w1) / denom;
+                                    let r3 = (w2 * inv_w2) / denom;
 
                                     let color = TGAColor::new(
-                                        (r1 * clr0.r as f32 + r2 * clr1.r as f32 + r3 * clr2.r as f32) as u8,
-                                        (r1 * clr0.g as f32 + r2 * clr1.g as f32 + r3 * clr2.g as f32) as u8,
-                                        (r1 * clr0.b as f32 + r2 * clr1.b as f32 + r3 * clr2.b as f32) as u8,
-                                        (r1 * clr0.a as f32 + r2 * clr1.a as f32 + r3 * clr2.a as f32) as u8,
+                                        r1 * clr0.r + r2 * clr1.r + r3 * clr2.r,
+                                        r1 * clr0.g + r2 * clr1.g + r3 * clr2.g,
+                                        r1 * clr0.b + r2 * clr1.b + r3 * clr2.b,
+                                        r1 * clr0.a + r2 * clr1.a + r3 * clr2.a,
                                     );
 
                                     let depth = r1 * d0 + r2 * d1 + r3 * d2;
-                                    let normal = r1 * *n0 + r2 * *n1 + r3 * *n2;
-                                    let texcoord = r1 * *tc0 + r2 * *tc1 + r3 * *tc2;
+                                    let normal = r1 * n0 + r2 * n1 + r3 * n2;
+                                    let texcoord = r1 * tc0 + r2 * tc1 + r3 * tc2;
 
                                     // self.framebuffer.set(x as usize, y as usize, &color);
                                     let frag = FragmentInput {
@@ -332,10 +334,30 @@ impl<'a> RenderPipleline<'a> {
         }
     }
 
-    fn fragment_shader(&mut self, _uniforms: &Uniforms, frags: Vec<FragmentInput>) {
+    fn fragment_shader(&mut self, uniforms: &Uniforms, frags: Vec<FragmentInput>) {
         for frag in frags {
             let i = frag.pos.y as usize * self.w + frag.pos.x as usize;
-            self.color_buffer[i] = frag.color;
+
+            let ambient_light_strength = 0.1;
+            let ambient = ambient_light_strength * uniforms.ambient_color;
+
+            let diff = f32::max(frag.normal.dot(uniforms.light_dir), 0.0);
+            let diffuse = diff * uniforms.ambient_color;
+
+            let specular_light_strength = 0.5;
+            let halfway_dir = (uniforms.light_dir + uniforms.view_dir).normalize();
+            let spec = f32::powi(f32::max(frag.normal.dot(halfway_dir), 0.0), 32);
+            let specular = specular_light_strength * spec * uniforms.ambient_color;
+
+            let rate = ambient + diffuse + specular; 
+
+            let lit_color = TGAColor::new(
+                rate.x * frag.color.r,
+                rate.y * frag.color.g,
+                rate.z * frag.color.b,
+                frag.color.a,
+            );
+            self.color_buffer[i] = lit_color;
         }
     }
 
@@ -390,7 +412,7 @@ pub struct Uniforms<'a> {
 
     // ---- 材质参数 ----
     pub light_dir: Vec3,      // 光照方向
-    pub camera_pos: Vec3,     // 相机位置
+    pub view_dir: Vec3,     // 视角方向
     pub ambient_color: Vec3,  // 环境光颜色
     pub diffuse_color: Vec3,  // 漫反射颜色
     pub specular_color: Vec3, // 高光颜色

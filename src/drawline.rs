@@ -2,9 +2,6 @@ pub use crate::datatype::Point2D;
 pub use crate::tgaimage::*;
 pub use glam::{IVec2, Vec2};
 
-pub trait Drawline {
-    fn draw(image: &mut TGAImage, p0: &Point2D, p1: &Point2D, c: &TGAColor);
-}
 
 /// DDA 浮点直线绘制 — 接受浮点坐标端点
 pub struct DDA;
