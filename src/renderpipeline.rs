@@ -206,7 +206,15 @@ impl<'a> RenderPipleline<'a> {
 
     fn vertex_shader(&self, input: &VertexInput, uniforms: &Uniforms) -> VertexOutput {
         let pos = uniforms.model_view_proj * input.pos.extend(1.0);
-        let varyings = input.varyings.clone();
+        
+        // 获取局部法线
+        let local_normal = match input.varyings[1] { Varying::Vec3(n) => n, _ => unreachable!() };
+        // 变换到世界空间
+        let world_normal = uniforms.normal_matrix * local_normal;
+        
+        let mut varyings = input.varyings.clone();
+        varyings[1] = Varying::Vec3(world_normal);
+        
         VertexOutput { pos, varyings }
     }
 
@@ -276,9 +284,9 @@ impl<'a> RenderPipleline<'a> {
                     for x in x_min..=x_max {
                         for y in y_min..=y_max {
                             let p_center = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
-                            let w0 = ((p1_f - p0_f).perp_dot(p_center - p0_f)) / area;
-                            let w1 = ((p2_f - p1_f).perp_dot(p_center - p1_f)) / area;
-                            let w2 = ((p0_f - p2_f).perp_dot(p_center - p2_f)) / area;
+                            let w0 = ((p2_f - p1_f).perp_dot(p_center - p1_f)) / area;
+                            let w1 = ((p0_f - p2_f).perp_dot(p_center - p2_f)) / area;
+                            let w2 = ((p1_f - p0_f).perp_dot(p_center - p0_f)) / area;
 
                             if w0 >= -eps && w1 >= -eps && w2 >= -eps {
                                 let inv_w0 = 1.0 / w0_clip;
@@ -350,7 +358,7 @@ impl<'a> RenderPipleline<'a> {
                 _ => unreachable!("first varying must be color"),
             };
             let normal = match frag.varyings[1] {
-                Varying::Vec3(normal) => normal,
+                Varying::Vec3(normal) => normal.normalize(),
                 _ => unreachable!("second varying must be normal"),
             };
 
@@ -358,12 +366,12 @@ impl<'a> RenderPipleline<'a> {
             let ambient = ambient_light_strength * uniforms.ambient_color;
 
             let diff = f32::max(normal.dot(uniforms.light_dir), 0.0);
-            let diffuse = diff * uniforms.ambient_color;
+            let diffuse = diff * uniforms.diffuse_color;
 
             let specular_light_strength = 1.0;
             let halfway_dir = (uniforms.light_dir + uniforms.view_dir).normalize();
             let spec = f32::powi(f32::max(normal.dot(halfway_dir), 0.0), 32);
-            let specular = specular_light_strength * spec * uniforms.ambient_color;
+            let specular = specular_light_strength * spec * uniforms.specular_color;
 
             let rate = ambient + diffuse + specular;
 
@@ -374,6 +382,15 @@ impl<'a> RenderPipleline<'a> {
                 color.a,
             );
             self.color_buffer[i] = lit_color;
+
+            // // test normal
+            // let debug_color = TGAColor::new(
+            //     normal.x * 0.5 + 0.5,
+            //     normal.y * 0.5 + 0.5,
+            //     normal.z * 0.5 + 0.5,
+            //     1.0,
+            // );
+            // self.color_buffer[i] = debug_color;
         }
     }
 

@@ -83,7 +83,7 @@ fn main() {
 
     let model_view      = view_mat * model_mat;
     let model_view_proj = proj_mat * model_view;
-    let normal_matrix   = Mat3::from_mat4(model_view.inverse().transpose());
+    let normal_matrix   = Mat3::from_mat4(model_mat.inverse().transpose());
 
     let uniforms = Uniforms {
         model: model_mat,
@@ -93,7 +93,7 @@ fn main() {
         model_view_proj,
         normal_matrix,
         light_dir:      Vec3::new(-1.0, 1.0, 1.0).normalize(),
-        view_dir:     eye,
+        view_dir:       (eye - center),
         ambient_color:  Vec3::new(0.5, 0.5, 0.5), // 环境光颜色
         diffuse_color:  Vec3::new(0.7, 0.7, 0.7),
         specular_color: Vec3::new(0.3, 0.3, 0.3),
@@ -106,7 +106,7 @@ fn main() {
     // 5. 运行渲染管线
     let mut pipeline = RenderPipleline::new(&mut framebuffer);
     pipeline.add_data(&vertices);
-    pipeline.set_flat_normal(true);
+    pipeline.set_flat_normal(false);
     pipeline.set_uniforms(&uniforms);
     pipeline.set_draw_mode(renderpipeline::PolygonMode::FILL);
     pipeline.draw();
