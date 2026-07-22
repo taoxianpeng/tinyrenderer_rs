@@ -101,7 +101,7 @@ fn is_in_edge(p: &IVec2, v_start: &IVec2, v_end: &IVec2) -> bool {
 }
 
 pub struct RenderPipleline<'a> {
-    buffer: Option<&'a Vec<VertexInput>>,
+    buffer: Option<Vec<VertexInput>>,
     uniforms: Option<&'a Uniforms<'a>>,
     polygon_mode: PolygonMode,
     flat_normal: bool,
@@ -130,7 +130,7 @@ impl<'a> RenderPipleline<'a> {
         }
     }
 
-    pub fn add_data(&mut self, data: &'a Vec<VertexInput>) {
+    pub fn add_data(&mut self, data: Vec<VertexInput>) {
         self.buffer = Some(data);
     }
 
@@ -151,7 +151,7 @@ impl<'a> RenderPipleline<'a> {
     }
 
     pub fn draw(&mut self) {
-        if let (Some(vertex_array), Some(uniforms)) = (self.buffer, self.uniforms) {
+        if let (Some(vertex_array), Some(uniforms)) = (self.buffer.as_ref(), self.uniforms) {
             let mut primitive_array: Vec<[VertexOutput; 3]> = Vec::new();
 
             // 每 3 个顶点为一组（一个三角形），执行 vertex shader
