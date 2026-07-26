@@ -101,7 +101,6 @@ fn is_in_edge(p: &IVec2, v_start: &IVec2, v_end: &IVec2) -> bool {
 
 pub struct RenderPipleline<'a> {
     buffer: Option<Vec<VertexInput>>,
-    uniforms: Option<&'a Uniforms<'a>>,
     polygon_mode: PolygonMode,
     flat_normal: bool,
     framebuffer: &'a mut dyn FrameBufferTarget,
@@ -118,7 +117,6 @@ impl<'a> RenderPipleline<'a> {
         let total_pixels = w * h;
         RenderPipleline {
             buffer: None,
-            uniforms: None,
             polygon_mode: PolygonMode::LINE,
             flat_normal: false,
             framebuffer,
@@ -127,6 +125,13 @@ impl<'a> RenderPipleline<'a> {
             depth_buffer: vec![f32::MAX; total_pixels],
             color_buffer: vec![TGAColor::new(0.0, 0.0, 0.0, 0.0); total_pixels],
         }
+    }
+
+    /// 每帧开始时调用：清空顶点数据、重置 depth/color buffer（不复分配）
+    pub fn begin_frame(&mut self) {
+        self.buffer = None;
+        self.depth_buffer.fill(f32::MAX);
+        self.color_buffer.fill(TGAColor::new(0.0, 0.0, 0.0, 0.0));
     }
 
     pub fn add_data(&mut self, data: Vec<VertexInput>) {
@@ -141,16 +146,22 @@ impl<'a> RenderPipleline<'a> {
         self.polygon_mode = mode;
     }
 
-    pub fn set_uniforms(&mut self, unforms: &'a Uniforms) {
-        self.uniforms = Some(unforms);
-    }
-
     pub fn set_flat_normal(&mut self, enable: bool) {
         self.flat_normal = enable;
     }
 
-    pub fn draw(&mut self) {
-        if let (Some(vertex_array), Some(uniforms)) = (self.buffer.as_ref(), self.uniforms) {
+    /// 获取帧缓冲的 u32 切片供 minifb 显示
+    pub fn display_buffer(&self) -> &[u32] {
+        self.framebuffer.raw_buffer()
+    }
+
+    /// 清除帧缓冲
+    pub fn clear_buffer(&mut self, color: &TGAColor) {
+        self.framebuffer.clear(color);
+    }
+
+    pub fn draw<'b>(&mut self, uniforms: &Uniforms<'b>) {
+        if let Some(vertex_array) = self.buffer.as_ref() {
             let mut primitive_array: Vec<[VertexOutput; 3]> = Vec::new();
 
             // 每 3 个顶点为一组（一个三角形），执行 vertex shader
@@ -203,7 +214,7 @@ impl<'a> RenderPipleline<'a> {
         }
     }
 
-    fn vertex_shader(&self, input: &VertexInput, uniforms: &Uniforms) -> VertexOutput {
+    fn vertex_shader<'b>(&self, input: &VertexInput, uniforms: &Uniforms<'b>) -> VertexOutput {
         let pos = uniforms.model_view_proj * input.pos.extend(1.0);
         
         // 获取局部法线
@@ -263,11 +274,13 @@ impl<'a> RenderPipleline<'a> {
             match self.polygon_mode {
                 PolygonMode::FILL => {
                     // DrawTriangleFill::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
-                    // 计算包围盒
-                    let x_min = min_3(p0.x, p1.x, p2.x);
-                    let x_max = max_3(p0.x, p1.x, p2.x);
-                    let y_min = min_3(p0.y, p1.y, p2.y);
-                    let y_max = max_3(p0.y, p1.y, p2.y);
+                    // 计算包围盒，并裁剪到屏幕范围内
+                    let w = self.w as i32;
+                    let h = self.h as i32;
+                    let x_min = min_3(p0.x, p1.x, p2.x).clamp(0, w - 1);
+                    let x_max = max_3(p0.x, p1.x, p2.x).clamp(0, w - 1);
+                    let y_min = min_3(p0.y, p1.y, p2.y).clamp(0, h - 1);
+                    let y_max = max_3(p0.y, p1.y, p2.y).clamp(0, h - 1);
 
                     // 判断包围盒里像素是在三角形内还是外
                     let eps = 1e-6f32;
@@ -330,11 +343,18 @@ impl<'a> RenderPipleline<'a> {
 
     fn depth_test(&mut self, frags: Vec<FragmentInput>) -> Option<Vec<FragmentInput>> {
         let w = self.w;
+        let h = self.h;
         let depth_buffer = &mut self.depth_buffer;
         let result: Vec<FragmentInput> = frags
             .into_iter()
             .filter(|frag| {
-                let idx = frag.pos.y as usize * w + frag.pos.x as usize;
+                let x = frag.pos.x as usize;
+                let y = frag.pos.y as usize;
+                // 跳过屏幕外的片段
+                if x >= w || y >= h {
+                    return false;
+                }
+                let idx = y * w + x;
                 if frag.depth < depth_buffer[idx] {
                     depth_buffer[idx] = frag.depth;
                     true
@@ -351,7 +371,7 @@ impl<'a> RenderPipleline<'a> {
         }
     }
 
-    fn fragment_shader(&mut self, uniforms: &Uniforms, frags: Vec<FragmentInput>) {
+    fn fragment_shader<'b>(&mut self, uniforms: &Uniforms<'b>, frags: Vec<FragmentInput>) {
         for frag in frags {
             let i = frag.pos.y as usize * self.w + frag.pos.x as usize;
 
@@ -408,6 +428,7 @@ impl<'a> RenderPipleline<'a> {
 }
 
 // 输入: 一个顶点的原始属性
+#[derive(Clone)]
 pub struct VertexInput {
     pub pos: Vec3,
     pub varyings: Vec<Varying>,

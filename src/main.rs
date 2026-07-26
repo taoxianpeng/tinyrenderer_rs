@@ -26,30 +26,31 @@ fn main() {
 }
 
 fn run() {
-    let vertexs_data = vec![
+    // 一次性加载所有模型
+    let vertexs_data: Vec<Vec<VertexInput>> = vec![
         load_model("assert/african_head/african_head.obj"),
         load_model("assert/african_head/african_head_eye_inner.obj"),
         load_model("assert/african_head/african_head_eye_outer.obj"),
-    ];
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
     let width = 800;
     let height = 800;
-
-    // 1. 创建帧缓冲 & 设置背景色
-    let mut framebuffer = FrameBuffer::new(width, height);
-    framebuffer.clear_color(&TGAColor {
+    let bg_color = TGAColor {
         r: 30.0 / 255.0,
         g: 30.0 / 255.0,
         b: 30.0 / 255.0,
         a: 1.0,
-    });
+    };
 
-    // 2. 设置相机 / 投影变换
-    let model_mat = Mat4::IDENTITY;
-    let eye = Vec3::new(1.0, 0.0, 2.5);
-    let center = Vec3::ZERO;
-    let up = Vec3::Y;
-    let view_mat = lookat(&eye, &center, &up);
+    let mut framebuffer = FrameBuffer::new(width, height);
+    let mut pipeline = RenderPipleline::new(&mut framebuffer);
+    pipeline.set_flat_normal(false);
+    pipeline.set_draw_mode(renderpipeline::PolygonMode::FILL);
+
+    // 投影矩阵（不变）
     let proj_mat = projection(
         renderpipeline::ProjectionMode::PERSPECTIVE,
         std::f32::consts::FRAC_PI_4,
@@ -61,64 +62,88 @@ fn run() {
         10.0,
     );
 
-    let model_view = view_mat * model_mat;
-    let model_view_proj = proj_mat * model_view;
-    let normal_matrix = Mat3::from_mat4(model_mat.inverse().transpose());
+    // 打开 minifb 窗口（不限帧率）
+    let mut window = Window::new("Tiny Renderer", width, height, WindowOptions::default())
+        .unwrap_or_else(|e| panic!("{}", e));
+    window.set_target_fps(0);
 
-    let uniforms = Uniforms {
-        model: model_mat,
-        view: view_mat,
-        projection: proj_mat,
-        model_view,
-        model_view_proj,
-        normal_matrix,
-        light_dir: Vec3::new(-1.0, 1.0, 1.0).normalize(),
-        view_dir: (eye - center),
-        ambient_color: Vec3::new(0.5, 0.5, 0.5),
-        diffuse_color: Vec3::new(0.7, 0.7, 0.7),
-        specular_color: Vec3::new(0.3, 0.3, 0.3),
-        diffuse_tex: None,
-        normal_tex: None,
-        specular_tex: None,
-        glossiness_tex: None,
-    };
-
-    // 3. 运行渲染管线
-    let mut pipeline = RenderPipleline::new(&mut framebuffer);
-    pipeline.set_flat_normal(false);
-    pipeline.set_draw_mode(renderpipeline::PolygonMode::FILL);
-
-    for vertexs_opt in vertexs_data {
-        if let Some(verts) = vertexs_opt {
-            pipeline.add_data(verts);
-            pipeline.set_uniforms(&uniforms);
-            pipeline.draw();
-        }
-    }
-
-    // 4. 保存为 TGA 文件
-    framebuffer.save_to_image("output_render.tga");
-
-    // 5. 打开 minifb 窗口显示渲染结果（不限帧率）
-    let mut window = Window::new(
-        "Tiny Renderer",
-        width,
-        height,
-        WindowOptions::default(),
-    )
-    .unwrap_or_else(|e| panic!("{}", e));
-
-    window.set_target_fps(0); // 不限帧率
+    // 相机状态：球面坐标
+    let mut yaw = 0.0f32;
+    let mut pitch = 0.0f32;
+    let radius = 2.5f32;
+    let center = Vec3::ZERO;
+    let up = Vec3::Y;
+    let model_mat = Mat4::IDENTITY;
+    const ROTATE_SPEED: f32 = 0.05;
+    let light_dir = Vec3::new(-1.0, 1.0, 1.0).normalize();
 
     let mut fps_timer = Instant::now();
     let mut frame_count = 0u32;
     let mut fps = 0u32;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
+        // ----- 处理输入：上下左右旋转相机 -----
+        if window.is_key_down(Key::Left) {
+            yaw -= ROTATE_SPEED;
+        }
+        if window.is_key_down(Key::Right) {
+            yaw += ROTATE_SPEED;
+        }
+        if window.is_key_down(Key::Up) {
+            pitch = (pitch + ROTATE_SPEED).min(1.5);
+        }
+        if window.is_key_down(Key::Down) {
+            pitch = (pitch - ROTATE_SPEED).max(-1.5);
+        }
+
+        // ----- 相机位置（球面 → 笛卡尔）-----
+        let eye = radius * Vec3::new(
+            yaw.sin() * pitch.cos(),
+            pitch.sin(),
+            yaw.cos() * pitch.cos(),
+        );
+
+        let view_mat = lookat(&eye, &center, &up);
+        let model_view = view_mat * model_mat;
+        let model_view_proj = proj_mat * model_view;
+        let normal_matrix = Mat3::from_mat4(model_mat.inverse().transpose());
+
+        // view_dir: 从表面指向相机的方向 → 用于 Blinn-Phong 半向量
+        let view_dir = (eye - center).normalize();
+
+        let uniforms = Uniforms {
+            model: model_mat,
+            view: view_mat,
+            projection: proj_mat,
+            model_view,
+            model_view_proj,
+            normal_matrix,
+            light_dir,
+            view_dir,
+            ambient_color: Vec3::new(0.5, 0.5, 0.5),
+            diffuse_color: Vec3::new(0.7, 0.7, 0.7),
+            specular_color: Vec3::new(0.3, 0.3, 0.3),
+            diffuse_tex: None,
+            normal_tex: None,
+            specular_tex: None,
+            glossiness_tex: None,
+        };
+
+        // ----- 渲染（复用 pipeline，不复分配）-----
+        pipeline.clear_buffer(&bg_color);
+        pipeline.begin_frame();
+
+        for verts in &vertexs_data {
+            pipeline.add_data(verts.clone());
+            pipeline.draw(&uniforms);
+        }
+
+        // ----- 显示 -----
         window
-            .update_with_buffer(framebuffer.as_buffer(), width, height)
+            .update_with_buffer(pipeline.display_buffer(), width, height)
             .unwrap();
 
+        // ----- FPS 统计 -----
         frame_count += 1;
         let elapsed = fps_timer.elapsed();
         if elapsed.as_secs_f64() >= 1.0 {
@@ -126,15 +151,16 @@ fn run() {
             frame_count = 0;
             fps_timer = Instant::now();
 
-            // 主方案：在窗口标题显示 FPS
             window.set_title(&format!("Tiny Renderer - {} FPS", fps));
 
-            // 备用方案：debug 开关输出 FPS 到控制台
             if DEBUG_FPS {
                 println!("[DEBUG] FPS: {}", fps);
             }
         }
     }
+
+    // 退出时保存
+    framebuffer.save_to_image("output_render.tga");
 }
 
 fn load_model(path: &str) -> Option<Vec<VertexInput>> {

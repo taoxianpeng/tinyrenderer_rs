@@ -5,6 +5,18 @@ pub trait FrameBufferTarget {
     fn set(&mut self, x: usize, y: usize, color: &TGAColor);
     fn width(&self) -> usize;
     fn height(&self) -> usize;
+    /// 清空帧缓冲为指定颜色（默认逐像素 set，可重写为更快的 bulk 操作）
+    fn clear(&mut self, color: &TGAColor) {
+        for y in 0..self.height() {
+            for x in 0..self.width() {
+                self.set(x, y, color);
+            }
+        }
+    }
+    /// 返回 u32 像素切片供 minifb 显示（非 FrameBuffer 类型返回空切片）
+    fn raw_buffer(&self) -> &[u32] {
+        &[]
+    }
 }
 
 pub struct FrameBuffer {
@@ -96,6 +108,18 @@ impl FrameBufferTarget for FrameBuffer {
 
     fn height(&self) -> usize {
         self.height
+    }
+
+    fn clear(&mut self, color: &TGAColor) {
+        let r = (color.r.clamp(0.0, 1.0) * 255.0).round() as u32;
+        let g = (color.g.clamp(0.0, 1.0) * 255.0).round() as u32;
+        let b = (color.b.clamp(0.0, 1.0) * 255.0).round() as u32;
+        let pixel = (r << 16) | (g << 8) | b;
+        self.buffer.fill(pixel);
+    }
+
+    fn raw_buffer(&self) -> &[u32] {
+        &self.buffer
     }
 }
 
