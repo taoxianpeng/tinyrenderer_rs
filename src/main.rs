@@ -4,18 +4,22 @@ mod drawtriangle;
 mod model;
 mod renderpipeline;
 mod tgaimage;
+mod framebuffer;
 
+use minifb::{Key, Window, WindowOptions};
 use glam::{Mat3, Mat4, Vec2, Vec3};
 use std::path::Path;
-use tgaimage::{TGAColor, TGAImage, TGAImageType};
+use std::time::Instant;
 
 use model::Model;
-use renderpipeline::{RenderPipleline, Uniforms, VertexInput};
+use renderpipeline::{RenderPipleline, Uniforms, VertexInput, Varying};
 
-use crate::{
-    drawline::{BLACK, BLUE, GREEN, RED, WHITE},
-    renderpipeline::{lookat, projection},
-};
+use crate::drawline::WHITE;
+use crate::framebuffer::FrameBuffer;
+use crate::renderpipeline::{lookat, projection};
+use crate::tgaimage::TGAColor;
+
+const DEBUG_FPS: bool = false;
 
 fn main() {
     run();
@@ -23,42 +27,38 @@ fn main() {
 
 fn run() {
     let vertexs_data = vec![
-        load_model("assert/african_head/african_head.obj"), 
+        load_model("assert/african_head/african_head.obj"),
         load_model("assert/african_head/african_head_eye_inner.obj"),
         load_model("assert/african_head/african_head_eye_outer.obj"),
-        ];
+    ];
 
     let width = 800;
     let height = 800;
-    let mut framebuffer = TGAImage::new(width, height, TGAImageType::RGB);
-    framebuffer.set_background_color(&TGAColor {
+
+    // 1. 创建帧缓冲 & 设置背景色
+    let mut framebuffer = FrameBuffer::new(width, height);
+    framebuffer.clear_color(&TGAColor {
         r: 30.0 / 255.0,
         g: 30.0 / 255.0,
         b: 30.0 / 255.0,
         a: 1.0,
     });
 
-    // 4. 设置相机 / 投影变换
+    // 2. 设置相机 / 投影变换
     let model_mat = Mat4::IDENTITY;
-
-    // 把模型摆正：绕 X 轴旋转 -90°，使 OBJ 的 Y-up 转为 Z-up 的世界坐标系
-    //（实际由 model matrix 控制，这里保持单位阵 + 调整 camera 位置即可）
     let eye = Vec3::new(1.0, 0.0, 2.5);
     let center = Vec3::ZERO;
     let up = Vec3::Y;
     let view_mat = lookat(&eye, &center, &up);
-
-    // let proj_mat = Mat4::perspective_rh_gl(
     let proj_mat = projection(
         renderpipeline::ProjectionMode::PERSPECTIVE,
-        std::f32::consts::FRAC_PI_4, // 45° FOV
-        // width as f32 / height as f32, // 宽高比
+        std::f32::consts::FRAC_PI_4,
         Vec2 {
             x: width as f32,
             y: height as f32,
         },
-        0.1,  // near
-        10.0, // far
+        0.1,
+        10.0,
     );
 
     let model_view = view_mat * model_mat;
@@ -74,7 +74,7 @@ fn run() {
         normal_matrix,
         light_dir: Vec3::new(-1.0, 1.0, 1.0).normalize(),
         view_dir: (eye - center),
-        ambient_color: Vec3::new(0.5, 0.5, 0.5), // 环境光颜色
+        ambient_color: Vec3::new(0.5, 0.5, 0.5),
         diffuse_color: Vec3::new(0.7, 0.7, 0.7),
         specular_color: Vec3::new(0.3, 0.3, 0.3),
         diffuse_tex: None,
@@ -83,7 +83,7 @@ fn run() {
         glossiness_tex: None,
     };
 
-    // 5. 运行渲染管线
+    // 3. 运行渲染管线
     let mut pipeline = RenderPipleline::new(&mut framebuffer);
     pipeline.set_flat_normal(false);
     pipeline.set_draw_mode(renderpipeline::PolygonMode::FILL);
@@ -96,16 +96,48 @@ fn run() {
         }
     }
 
-    // 6. 输出渲染图
-    framebuffer
-        .write_tga_file("output_render.tga", false, true)
-        .unwrap();
-    println!("输出完成: output_render.tga ({}x{})", width, height);
+    // 4. 保存为 TGA 文件
+    framebuffer.save_to_image("output_render.tga");
+
+    // 5. 打开 minifb 窗口显示渲染结果（不限帧率）
+    let mut window = Window::new(
+        "Tiny Renderer",
+        width,
+        height,
+        WindowOptions::default(),
+    )
+    .unwrap_or_else(|e| panic!("{}", e));
+
+    window.set_target_fps(0); // 不限帧率
+
+    let mut fps_timer = Instant::now();
+    let mut frame_count = 0u32;
+    let mut fps = 0u32;
+
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        window
+            .update_with_buffer(framebuffer.as_buffer(), width, height)
+            .unwrap();
+
+        frame_count += 1;
+        let elapsed = fps_timer.elapsed();
+        if elapsed.as_secs_f64() >= 1.0 {
+            fps = frame_count;
+            frame_count = 0;
+            fps_timer = Instant::now();
+
+            // 主方案：在窗口标题显示 FPS
+            window.set_title(&format!("Tiny Renderer - {} FPS", fps));
+
+            // 备用方案：debug 开关输出 FPS 到控制台
+            if DEBUG_FPS {
+                println!("[DEBUG] FPS: {}", fps);
+            }
+        }
+    }
 }
 
 fn load_model(path: &str) -> Option<Vec<VertexInput>> {
-    // 1. 加载 OBJ 模型
-    // let model: Model = Model::new(Path::new("assert/diablo3_pose.obj"));
     let model: Model = Model::new(Path::new(path));
     println!(
         "模型加载成功: {} 顶点, {} 面",
@@ -113,11 +145,8 @@ fn load_model(path: &str) -> Option<Vec<VertexInput>> {
         model.faces().len() - 1,
     );
 
-    // 2. 构建顶点输入数组
-    //    遍历每个三角形面，将每个顶点的位置/法线/纹理坐标组成 VertexInput
     let mut vertices: Vec<VertexInput> = Vec::new();
     for face in model.faces() {
-        // 只处理三角形面（通常 obj 导出时已三角化）
         if face.len() == 3 {
             for idx in face {
                 let pos = model.verts()[idx[0] as usize];
@@ -129,9 +158,9 @@ fn load_model(path: &str) -> Option<Vec<VertexInput>> {
                 vertices.push(VertexInput {
                     pos,
                     varyings: vec![
-                        renderpipeline::Varying::Color(WHITE),
-                        renderpipeline::Varying::Vec3(normal),
-                        renderpipeline::Varying::Vec2(texcoord),
+                        Varying::Color(WHITE),
+                        Varying::Vec3(normal),
+                        Varying::Vec2(texcoord),
                     ],
                 });
             }

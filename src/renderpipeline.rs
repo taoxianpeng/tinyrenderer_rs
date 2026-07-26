@@ -1,7 +1,6 @@
 use crate::drawline::TGAColor;
-use crate::drawtriangle::DrawTriangle;
+use crate::framebuffer::FrameBufferTarget;
 use crate::renderpipeline::{ProjectionMode::ORTHO, ProjectionMode::PERSPECTIVE};
-use crate::tgaimage;
 use crate::tgaimage::TGAImage;
 use glam::{IVec2, Mat3, Mat4, Vec2, Vec3, Vec4, vec4};
 use std::cmp::{max, min};
@@ -105,7 +104,7 @@ pub struct RenderPipleline<'a> {
     uniforms: Option<&'a Uniforms<'a>>,
     polygon_mode: PolygonMode,
     flat_normal: bool,
-    framebuffer: &'a mut TGAImage,
+    framebuffer: &'a mut dyn FrameBufferTarget,
     w: usize,
     h: usize,
     depth_buffer: Vec<f32>,
@@ -113,7 +112,7 @@ pub struct RenderPipleline<'a> {
 }
 
 impl<'a> RenderPipleline<'a> {
-    pub fn new(framebuffer: &'a mut TGAImage) -> RenderPipleline<'a> {
+    pub fn new(framebuffer: &'a mut dyn FrameBufferTarget) -> RenderPipleline<'a> {
         let w = framebuffer.width();
         let h = framebuffer.height();
         let total_pixels = w * h;
@@ -317,8 +316,11 @@ impl<'a> RenderPipleline<'a> {
                     return Some(fragments);
                 }
                 PolygonMode::LINE => {
-                    // DrawTriangleFloat::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
-                    DrawTriangle::draw(self.framebuffer, &p0, &p1, &p2, &tgaimage::RED);
+                    // LINE mode using generic framebuffer
+                    let red = TGAColor::new(1.0, 0.0, 0.0, 1.0);
+                    draw_line(self.framebuffer, &p0, &p1, &red);
+                    draw_line(self.framebuffer, &p1, &p2, &red);
+                    draw_line(self.framebuffer, &p0, &p2, &red);
                 }
                 PolygonMode::Point => {}
             }
@@ -468,6 +470,45 @@ fn interpolate_varyings(
         .zip(varyings2.iter())
         .map(|((a, b), c)| Varying::interpolate(*a, *b, *c, r1, r2, r3))
         .collect()
+}
+
+/// 使用 Bresenham 算法在泛型帧缓冲上绘制线段
+fn draw_line(target: &mut dyn FrameBufferTarget, p0: &IVec2, p1: &IVec2, color: &TGAColor) {
+    let mut x0 = p0.x;
+    let mut y0 = p0.y;
+    let mut x1 = p1.x;
+    let mut y1 = p1.y;
+
+    let steep = (y1 - y0).abs() > (x1 - x0).abs();
+    if steep {
+        std::mem::swap(&mut x0, &mut y0);
+        std::mem::swap(&mut x1, &mut y1);
+    }
+    if x0 > x1 {
+        std::mem::swap(&mut x0, &mut x1);
+        std::mem::swap(&mut y0, &mut y1);
+    }
+
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let dy_abs = dy.abs();
+    let y_step: i32 = if y1 >= y0 { 1 } else { -1 };
+    let mut d = 2 * dy_abs - dx;
+    let mut y = y0;
+
+    for x in x0..=x1 {
+        if steep {
+            target.set(y as usize, x as usize, color);
+        } else {
+            target.set(x as usize, y as usize, color);
+        }
+        if d > 0 {
+            y += y_step;
+            d += 2 * (dy_abs - dx);
+        } else {
+            d += 2 * dy_abs;
+        }
+    }
 }
 
 #[derive(Default)]

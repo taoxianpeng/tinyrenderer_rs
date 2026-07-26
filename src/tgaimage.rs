@@ -126,10 +126,10 @@ impl Default for TGAColor {
 
 #[derive(Debug)]
 pub struct TGAImage {
+    pub data: Vec<u8>,
     w: usize,
     h: usize,
     bpp: u8,
-    data: Vec<u8>,
 }
 
 impl TGAImage {
