@@ -114,25 +114,20 @@ impl Bresenham {
 mod test {
     use super::*;
 
+    // 测试颜色（f32，0.0–1.0 范围）
+    const DARK_RED: TGAColor = TGAColor::new(100.0 / 255.0, 23.0 / 255.0, 30.0 / 255.0, 1.0);
+    const PINK: TGAColor = TGAColor::new(200.0 / 255.0, 50.0 / 255.0, 80.0 / 255.0, 1.0);
+    const SKY_BLUE: TGAColor = TGAColor::new(50.0 / 255.0, 150.0 / 255.0, 200.0 / 255.0, 1.0);
+
     #[test]
     fn test_line_1() {
         let mut image = TGAImage::new(500, 500, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        });
+        image.set_background_color(&WHITE);
         Bresenham::draw(
             &mut image,
             &Point2D { x: 100, y: 100 },
             &Point2D { x: 400, y: 400 },
-            &TGAColor {
-                r: 100,
-                g: 23,
-                b: 30,
-                a: 255,
-            },
+            &DARK_RED,
         );
         image.write_tga_file("output.tga", false, true).unwrap();
     }
@@ -140,22 +135,12 @@ mod test {
     #[test]
     fn test_line_2() {
         let mut image = TGAImage::new(500, 500, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        });
+        image.set_background_color(&WHITE);
         Bresenham::draw(
             &mut image,
             &Point2D { x: 100, y: 200 },
             &Point2D { x: 400, y: 200 },
-            &TGAColor {
-                r: 100,
-                g: 23,
-                b: 30,
-                a: 255,
-            },
+            &DARK_RED,
         );
         image.write_tga_file("output.tga", false, true).unwrap();
     }
@@ -163,22 +148,12 @@ mod test {
     #[test]
     fn test_line_3() {
         let mut image = TGAImage::new(500, 500, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        });
+        image.set_background_color(&WHITE);
         Bresenham::draw(
             &mut image,
             &Point2D { x: 100, y: 300 },
             &Point2D { x: 400, y: 100 },
-            &TGAColor {
-                r: 100,
-                g: 23,
-                b: 30,
-                a: 255,
-            },
+            &DARK_RED,
         );
         image.write_tga_file("output.tga", false, true).unwrap();
     }
@@ -186,22 +161,12 @@ mod test {
     #[test]
     fn test_line_4_reversed_x() {
         let mut image = TGAImage::new(200, 200, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        });
+        image.set_background_color(&WHITE);
         Bresenham::draw(
             &mut image,
             &Point2D { x: 180, y: 30 },
             &Point2D { x: 20, y: 170 },
-            &TGAColor {
-                r: 200,
-                g: 50,
-                b: 80,
-                a: 255,
-            },
+            &PINK,
         );
         image.write_tga_file("output.tga", false, true).unwrap();
     }
@@ -210,22 +175,12 @@ mod test {
     fn test_line_steep_positive() {
         // 陡峭正斜率：|dy| > |dx|
         let mut image = TGAImage::new(200, 200, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        });
+        image.set_background_color(&WHITE);
         Bresenham::draw(
             &mut image,
             &Point2D { x: 30, y: 30 },
             &Point2D { x: 80, y: 170 },
-            &TGAColor {
-                r: 50,
-                g: 150,
-                b: 200,
-                a: 255,
-            },
+            &SKY_BLUE,
         );
         image.write_tga_file("output.tga", false, true).unwrap();
     }
@@ -234,22 +189,12 @@ mod test {
     fn test_line_steep_negative() {
         // 陡峭负斜率：|dy| > |dx|
         let mut image = TGAImage::new(200, 200, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        });
+        image.set_background_color(&WHITE);
         Bresenham::draw(
             &mut image,
             &Point2D { x: 80, y: 170 },
             &Point2D { x: 30, y: 30 },
-            &TGAColor {
-                r: 50,
-                g: 150,
-                b: 200,
-                a: 255,
-            },
+            &SKY_BLUE,
         );
         image.write_tga_file("output.tga", false, true).unwrap();
     }
@@ -259,14 +204,12 @@ mod test {
     #[test]
     fn test_dda_basic_diagonal() {
         let mut image = TGAImage::new(500, 500, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255, g: 255, b: 255, a: 255,
-        });
+        image.set_background_color(&WHITE);
         DDA::draw(
             &mut image,
             &Vec2::new(100.0, 100.0),
             &Vec2::new(400.0, 400.0),
-            &TGAColor { r: 100, g: 23, b: 30, a: 255 },
+            &DARK_RED,
         );
         image.write_tga_file("output.tga", false, true).unwrap();
     }
@@ -275,14 +218,12 @@ mod test {
     fn test_dda_float_endpoints() {
         // 浮点数端点，非整数位置
         let mut image = TGAImage::new(200, 200, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255, g: 255, b: 255, a: 255,
-        });
+        image.set_background_color(&WHITE);
         DDA::draw(
             &mut image,
             &Vec2::new(30.3, 50.7),
             &Vec2::new(170.8, 130.2),
-            &TGAColor { r: 200, g: 50, b: 80, a: 255 },
+            &PINK,
         );
         image.write_tga_file("output.tga", false, true).unwrap();
     }
@@ -291,14 +232,12 @@ mod test {
     fn test_dda_steep() {
         // 陡峭线
         let mut image = TGAImage::new(200, 200, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255, g: 255, b: 255, a: 255,
-        });
+        image.set_background_color(&WHITE);
         DDA::draw(
             &mut image,
             &Vec2::new(30.0, 30.0),
             &Vec2::new(80.0, 170.0),
-            &TGAColor { r: 50, g: 150, b: 200, a: 255 },
+            &SKY_BLUE,
         );
         image.write_tga_file("output.tga", false, true).unwrap();
     }
@@ -311,7 +250,7 @@ mod test {
             &mut image,
             &Vec2::new(5.3, 5.7),
             &Vec2::new(5.3, 5.7),
-            &TGAColor { r: 255, g: 0, b: 0, a: 255 },
+            &RED,
         );
     }
 }

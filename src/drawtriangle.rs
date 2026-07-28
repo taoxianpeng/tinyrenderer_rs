@@ -94,33 +94,20 @@ impl DrawTriangleFill {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::tgaimage::WHITE;
+
+    const DARK_OLIVE: TGAColor = TGAColor::new(100.0 / 255.0, 100.0 / 255.0, 29.0 / 255.0, 1.0);
 
     #[test]
     fn test_tri_1() {
         let mut image = TGAImage::new(500, 500, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        });
+        image.set_background_color(&WHITE);
 
         let p0 = Point2D { x: 250, y: 50 };
         let p1 = Point2D { x: 50, y: 450 };
         let p2 = Point2D { x: 450, y: 450 };
 
-        DrawTriangle::draw(
-            &mut image,
-            &p0,
-            &p1,
-            &p2,
-            &TGAColor {
-                r: 100,
-                g: 100,
-                b: 29,
-                a: 255,
-            },
-        );
+        DrawTriangle::draw(&mut image, &p0, &p1, &p2, &DARK_OLIVE);
 
         image
             .write_tga_file("output_triangle.tga", false, true)
@@ -133,28 +120,23 @@ mod test {
 #[cfg(test)]
 mod test_float {
     use super::*;
+    use crate::tgaimage::{RED, WHITE};
+
+    const DARK_OLIVE: TGAColor = TGAColor::new(100.0 / 255.0, 100.0 / 255.0, 29.0 / 255.0, 1.0);
+    const SKY_BLUE: TGAColor = TGAColor::new(50.0 / 255.0, 150.0 / 255.0, 200.0 / 255.0, 1.0);
+    const PINK: TGAColor = TGAColor::new(200.0 / 255.0, 50.0 / 255.0, 80.0 / 255.0, 1.0);
 
     #[test]
     fn test_tri_dda_basic() {
         let mut image = TGAImage::new(500, 500, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        });
+        image.set_background_color(&WHITE);
 
         DrawTriangleFloat::draw(
             &mut image,
             &Vec2::new(250.0, 50.0),
             &Vec2::new(50.0, 450.0),
             &Vec2::new(450.0, 450.0),
-            &TGAColor {
-                r: 100,
-                g: 100,
-                b: 29,
-                a: 255,
-            },
+            &DARK_OLIVE,
         );
 
         image
@@ -166,24 +148,14 @@ mod test_float {
     fn test_tri_dda_flat_line() {
         // 三个点近乎共线，浮点端点
         let mut image = TGAImage::new(200, 200, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        });
+        image.set_background_color(&WHITE);
 
         DrawTriangleFloat::draw(
             &mut image,
             &Vec2::new(20.3, 100.7),
             &Vec2::new(100.0, 100.5),
             &Vec2::new(180.8, 100.2),
-            &TGAColor {
-                r: 50,
-                g: 150,
-                b: 200,
-                a: 255,
-            },
+            &SKY_BLUE,
         );
 
         image
@@ -195,24 +167,14 @@ mod test_float {
     fn test_tri_dda_steep() {
         // 瘦高三角形（陡峭边）
         let mut image = TGAImage::new(200, 200, TGAImageType::RGB);
-        image.set_background_color(&TGAColor {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        });
+        image.set_background_color(&WHITE);
 
         DrawTriangleFloat::draw(
             &mut image,
             &Vec2::new(100.0, 20.0),
             &Vec2::new(30.0, 180.0),
             &Vec2::new(170.0, 180.0),
-            &TGAColor {
-                r: 200,
-                g: 50,
-                b: 80,
-                a: 255,
-            },
+            &PINK,
         );
 
         image
@@ -229,12 +191,7 @@ mod test_float {
             &Vec2::new(3.7, 4.2),
             &Vec2::new(15.1, 6.8),
             &Vec2::new(8.3, 16.5),
-            &TGAColor {
-                r: 255,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
+            &RED,
         );
 
         image

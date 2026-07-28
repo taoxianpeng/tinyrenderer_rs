@@ -170,7 +170,7 @@ mod test {
     #[test]
     fn test_model_load() {
         let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("assert/diablo3_pose.obj");
+        path.push("assert/diablo3_pose/diablo3_pose.obj");
 
         let model = Model::new(&path);
 

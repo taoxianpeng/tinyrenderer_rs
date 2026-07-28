@@ -435,8 +435,6 @@ impl TGAImage {
 
 #[cfg(test)]
 mod tests {
-    use crate::tgaimage::TGAImageType::Grayscale;
-
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -451,10 +449,10 @@ mod tests {
         let mut img = TGAImage::new(w, h, bpp);
         for y in 0..h {
             for x in 0..w {
-                let r = ((x * 64) % 256) as u8;
-                let g = ((y * 64) % 256) as u8;
-                let b = 128u8;
-                let a = 255u8;
+                let r = ((x * 64) % 256) as f32 / 255.0;
+                let g = ((y * 64) % 256) as f32 / 255.0;
+                let b = 128.0 / 255.0;
+                let a = 1.0;
                 img.set(x, y, &TGAColor::new(r, g, b, a));
             }
         }
@@ -465,13 +463,13 @@ mod tests {
     fn test_create_and_get_pixel() {
         let img = checker_image(4, 4, TGAImageType::RGBA);
         let c = img.get(1, 1).unwrap();
-        assert_eq!(c.r, 64);
-        assert_eq!(c.g, 64);
-        assert_eq!(c.b, 128);
-        assert_eq!(c.a, 255);
+        assert_eq!(c.r, 64.0 / 255.0);
+        assert_eq!(c.g, 64.0 / 255.0);
+        assert_eq!(c.b, 128.0 / 255.0);
+        assert_eq!(c.a, 1.0);
 
         let c0 = img.get(0, 0).unwrap();
-        assert_eq!(c0, TGAColor::new(0, 0, 128, 255));
+        assert_eq!(c0, TGAColor::new(0.0, 0.0, 128.0 / 255.0, 1.0));
     }
 
     #[test]
@@ -485,7 +483,7 @@ mod tests {
     #[test]
     fn test_set_out_of_bounds_no_panic() {
         let mut img = checker_image(2, 2, TGAImageType::RGBA);
-        img.set(10, 10, &TGAColor::new(255, 0, 0, 255));
+        img.set(10, 10, &TGAColor::new(1.0, 0.0, 0.0, 1.0));
         assert!(img.get(10, 10).is_none());
     }
 
@@ -549,9 +547,9 @@ mod tests {
     fn test_grayscale_roundtrip() {
         let path = test_path();
         let mut img = TGAImage::new(3, 3, TGAImageType::Grayscale);
-        img.set(0, 0, &TGAColor::new(0, 0, 0, 0));
-        img.set(1, 1, &TGAColor::new(0, 0, 128, 0));
-        img.set(2, 2, &TGAColor::new(0, 0, 255, 0));
+        img.set(0, 0, &TGAColor::new(0.0, 0.0, 0.0, 0.0));
+        img.set(1, 1, &TGAColor::new(0.0, 0.0, 128.0 / 255.0, 0.0));
+        img.set(2, 2, &TGAColor::new(0.0, 0.0, 1.0, 0.0));
 
         img.write_tga_file(&path, false, false).unwrap();
 
@@ -560,7 +558,7 @@ mod tests {
         assert_eq!(loaded.width(), 3);
         assert_eq!(loaded.height(), 3);
         assert_eq!(loaded.bytes_per_pixel(), 1);
-        assert_eq!(loaded.get(1, 1).unwrap().b, 128);
+        assert_eq!(loaded.get(1, 1).unwrap().b, 128.0 / 255.0);
 
         std::fs::remove_file(&path).ok();
     }
@@ -635,7 +633,7 @@ mod tests {
     fn test_rle_uniform_image() {
         let path = test_path();
         let mut img = TGAImage::new(8, 8, TGAImageType::RGBA);
-        let red = TGAColor::new(255, 0, 0, 255);
+        let red = TGAColor::new(1.0, 0.0, 0.0, 1.0);
         for y in 0..8 {
             for x in 0..8 {
                 img.set(x, y, &red);
@@ -692,7 +690,7 @@ mod tests {
     #[test]
     fn test_set_modifies_pixel() {
         let mut img = TGAImage::new(2, 2, TGAImageType::RGBA);
-        let blue = TGAColor::new(0, 0, 255, 255);
+        let blue = TGAColor::new(0.0, 0.0, 1.0, 1.0);
         img.set(1, 0, &blue);
         assert_eq!(img.get(1, 0).unwrap(), blue);
         assert_ne!(img.get(0, 0).unwrap(), blue);
@@ -701,10 +699,10 @@ mod tests {
     #[test]
     fn test_default_color_is_black() {
         let c = TGAColor::default();
-        assert_eq!(c.r, 0);
-        assert_eq!(c.g, 0);
-        assert_eq!(c.b, 0);
-        assert_eq!(c.a, 0);
+        assert_eq!(c.r, 0.0);
+        assert_eq!(c.g, 0.0);
+        assert_eq!(c.b, 0.0);
+        assert_eq!(c.a, 0.0);
     }
 
     #[test]
@@ -715,10 +713,10 @@ mod tests {
         let mut img = TGAImage::new(w, h, TGAImageType::RGBA);
         for y in 0..h {
             for x in 0..w {
-                let r = (x * 4) as u8;
-                let g = (y * 4) as u8;
-                let b = ((x + y) * 2) as u8;
-                let a = 255;
+                let r = (x * 4) as f32 / 255.0;
+                let g = (y * 4) as f32 / 255.0;
+                let b = ((x + y) * 2) as f32 / 255.0;
+                let a = 1.0;
                 img.set(x, y, &TGAColor::new(r, g, b, a));
             }
         }
