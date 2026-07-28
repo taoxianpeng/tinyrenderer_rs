@@ -100,7 +100,6 @@ fn is_in_edge(p: &IVec2, v_start: &IVec2, v_end: &IVec2) -> bool {
 }
 
 pub struct RenderPipleline<'a> {
-    buffer: Option<Vec<VertexInput>>,
     polygon_mode: PolygonMode,
     flat_normal: bool,
     framebuffer: &'a mut dyn FrameBufferTarget,
@@ -116,7 +115,6 @@ impl<'a> RenderPipleline<'a> {
         let h = framebuffer.height();
         let total_pixels = w * h;
         RenderPipleline {
-            buffer: None,
             polygon_mode: PolygonMode::LINE,
             flat_normal: false,
             framebuffer,
@@ -129,18 +127,11 @@ impl<'a> RenderPipleline<'a> {
 
     /// 每帧开始时调用：清空顶点数据、重置 depth/color buffer（不复分配）
     pub fn begin_frame(&mut self) {
-        self.buffer = None;
         self.depth_buffer.fill(f32::MAX);
         self.color_buffer.fill(TGAColor::new(0.0, 0.0, 0.0, 0.0));
     }
 
-    pub fn add_data(&mut self, data: Vec<VertexInput>) {
-        self.buffer = Some(data);
-    }
 
-    pub fn remove_data(&mut self) {
-        self.buffer = None;
-    }
 
     pub fn set_draw_mode(&mut self, mode: PolygonMode) {
         self.polygon_mode = mode;
@@ -160,58 +151,56 @@ impl<'a> RenderPipleline<'a> {
         self.framebuffer.clear(color);
     }
 
-    pub fn draw<'b>(&mut self, uniforms: &Uniforms<'b>) {
-        if let Some(vertex_array) = self.buffer.as_ref() {
-            let mut primitive_array: Vec<[VertexOutput; 3]> = Vec::new();
+    pub fn draw<'b>(&mut self, vertex_array: &[VertexInput], uniforms: &Uniforms<'b>) {
+        let mut primitive_array: Vec<[VertexOutput; 3]> = Vec::new();
 
-            // 每 3 个顶点为一组（一个三角形），执行 vertex shader
-            for chunk in vertex_array.chunks(3) {
-                if chunk.len() < 3 {
-                    break; // 不足 3 个顶点，丢弃
-                }
-
-                let v0 = self.vertex_shader(&chunk[0], uniforms);
-                let v1 = self.vertex_shader(&chunk[1], uniforms);
-                let v2 = self.vertex_shader(&chunk[2], uniforms);
-
-                primitive_array.push([v0, v1, v2]);
+        // 每 3 个顶点为一组（一个三角形），执行 vertex shader
+        for chunk in vertex_array.chunks(3) {
+            if chunk.len() < 3 {
+                break; // 不足 3 个顶点，丢弃
             }
 
-            // flat normal: 如果开启，将每个三角形三个顶点的法线统一为平均值
-            if self.flat_normal {
-                for tri in primitive_array.iter_mut() {
-                    let avg = match (
-                        &tri[0].varyings[1],
-                        &tri[1].varyings[1],
-                        &tri[2].varyings[1],
-                    ) {
-                        (Varying::Vec3(a), Varying::Vec3(b), Varying::Vec3(c)) => {
-                            (*a + *b + *c).normalize()
-                        }
-                        _ => unreachable!("second varying must be normal"),
-                    };
-                    let flat = Varying::Vec3(avg);
-                    tri[0].varyings[1] = flat;
-                    tri[1].varyings[1] = flat;
-                    tri[2].varyings[1] = flat;
-                }
-            }
+            let v0 = self.vertex_shader(&chunk[0], uniforms);
+            let v1 = self.vertex_shader(&chunk[1], uniforms);
+            let v2 = self.vertex_shader(&chunk[2], uniforms);
 
-            // 后续管线阶段
-            let primitives = self.primitive_assembly(primitive_array);
-            let mut fragment_inputs: Vec<FragmentInput> = Vec::new();
-            for primitive in &primitives {
-                if let Some(mut fragments) = self.rasterization(primitive) {
-                    fragment_inputs.append(&mut fragments);
-                }
-            }
-
-            if let Some(filtered_frags) = self.depth_test(fragment_inputs) {
-                self.fragment_shader(uniforms, filtered_frags);
-            }
-
-            self.raster_operations();
+            primitive_array.push([v0, v1, v2]);
         }
+
+        // flat normal: 如果开启，将每个三角形三个顶点的法线统一为平均值
+        if self.flat_normal {
+            for tri in primitive_array.iter_mut() {
+                let avg = match (
+                    &tri[0].varyings[1],
+                    &tri[1].varyings[1],
+                    &tri[2].varyings[1],
+                ) {
+                    (Varying::Vec3(a), Varying::Vec3(b), Varying::Vec3(c)) => {
+                        (*a + *b + *c).normalize()
+                    }
+                    _ => unreachable!("second varying must be normal"),
+                };
+                let flat = Varying::Vec3(avg);
+                tri[0].varyings[1] = flat;
+                tri[1].varyings[1] = flat;
+                tri[2].varyings[1] = flat;
+            }
+        }
+
+        // 后续管线阶段
+        let primitives = self.primitive_assembly(primitive_array);
+        let mut fragment_inputs: Vec<FragmentInput> = Vec::new();
+        for primitive in &primitives {
+            if let Some(mut fragments) = self.rasterization(primitive) {
+                fragment_inputs.append(&mut fragments);
+            }
+        }
+
+        if let Some(filtered_frags) = self.depth_test(fragment_inputs) {
+            self.fragment_shader(uniforms, filtered_frags);
+        }
+
+        // self.raster_operations(); // 已改为 fragment_shader 直写 framebuffer
     }
 
     fn vertex_shader<'b>(&self, input: &VertexInput, uniforms: &Uniforms<'b>) -> VertexOutput {
@@ -403,28 +392,20 @@ impl<'a> RenderPipleline<'a> {
                 rate.z * color.b,
                 color.a,
             );
-            self.color_buffer[i] = lit_color;
-
-            // // test normal
-            // let debug_color = TGAColor::new(
-            //     normal.x * 0.5 + 0.5,
-            //     normal.y * 0.5 + 0.5,
-            //     normal.z * 0.5 + 0.5,
-            //     1.0,
-            // );
-            // self.color_buffer[i] = debug_color;
+            // self.color_buffer[i] = lit_color; // 旧路径：先写 color_buffer，再由 ROP 复制到 framebuffer
+            self.framebuffer.set(frag.pos.x as usize, frag.pos.y as usize, &lit_color);
         }
     }
 
-    fn raster_operations(&mut self) {
-        for y in 0..self.h {
-            for x in 0..self.w {
-                let index = y * self.w + x;
-                let c = self.color_buffer[index];
-                self.framebuffer.set(x, y, &c);
-            }
-        }
-    }
+    // fn raster_operations(&mut self) {
+    //     for y in 0..self.h {
+    //         for x in 0..self.w {
+    //             let index = y * self.w + x;
+    //             let c = self.color_buffer[index];
+    //             self.framebuffer.set(x, y, &c);
+    //         }
+    //     }
+    // }
 }
 
 // 输入: 一个顶点的原始属性

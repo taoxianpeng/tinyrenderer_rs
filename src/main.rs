@@ -134,8 +134,7 @@ fn run() {
         pipeline.begin_frame();
 
         for verts in &vertexs_data {
-            pipeline.add_data(verts.clone());
-            pipeline.draw(&uniforms);
+            pipeline.draw(verts, &uniforms);
         }
 
         // ----- 显示 -----
