@@ -12,6 +12,12 @@ pub enum PolygonMode {
     Point,
 }
 
+pub enum CullMode {
+    BACK,
+    FRONT,
+    NULL
+}
+
 pub fn lookat(eye: &Vec3, center: &Vec3, up: &Vec3) -> Mat4 {
     // 先算左向量
     let f = (center - eye).normalize(); // -f -> +z direction 
@@ -102,6 +108,7 @@ fn is_in_edge(p: &IVec2, v_start: &IVec2, v_end: &IVec2) -> bool {
 pub struct RenderPipleline<'a> {
     polygon_mode: PolygonMode,
     flat_normal: bool,
+    cull: CullMode,
     framebuffer: &'a mut dyn FrameBufferTarget,
     w: usize,
     h: usize,
@@ -117,6 +124,7 @@ impl<'a> RenderPipleline<'a> {
         RenderPipleline {
             polygon_mode: PolygonMode::LINE,
             flat_normal: false,
+            cull: CullMode::NULL,
             framebuffer,
             w,
             h,
@@ -139,6 +147,10 @@ impl<'a> RenderPipleline<'a> {
 
     pub fn set_flat_normal(&mut self, enable: bool) {
         self.flat_normal = enable;
+    }
+
+    pub fn set_cull_mode(&mut self, mode: CullMode) {
+        self.cull = mode;
     }
 
     /// 获取帧缓冲的 u32 切片供 minifb 显示
@@ -279,6 +291,16 @@ impl<'a> RenderPipleline<'a> {
                     let area = (p1_f - p0_f).perp_dot(p2_f - p0_f);
 
                     if area.abs() < eps {
+                        return None;
+                    }
+
+                    let is_front_face = area < 0.0;
+                    let should_cull = match self.cull {
+                        CullMode::BACK => !is_front_face,
+                        CullMode::FRONT => is_front_face,
+                        CullMode::NULL => false,
+                    };
+                    if should_cull {
                         return None;
                     }
 

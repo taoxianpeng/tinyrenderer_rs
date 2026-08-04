@@ -48,6 +48,7 @@ fn run() {
     let mut framebuffer = FrameBuffer::new(width, height);
     let mut pipeline = RenderPipleline::new(&mut framebuffer);
     pipeline.set_flat_normal(false);
+    pipeline.set_cull_mode(renderpipeline::CullMode::BACK);
     pipeline.set_draw_mode(renderpipeline::PolygonMode::FILL);
 
     // 投影矩阵（不变）
