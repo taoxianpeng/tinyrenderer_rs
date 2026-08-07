@@ -4,6 +4,7 @@ use crate::renderpipeline::{ProjectionMode::ORTHO, ProjectionMode::PERSPECTIVE};
 use crate::tgaimage::TGAImage;
 use glam::{IVec2, Mat3, Mat4, Vec2, Vec3, Vec4, vec4};
 use std::cmp::{max, min};
+use std::os::unix::net::UnixStream;
 use std::vec;
 
 pub enum PolygonMode {
@@ -390,18 +391,41 @@ impl<'a> RenderPipleline<'a> {
                 Varying::Color(color) => color,
                 _ => unreachable!("first varying must be color"),
             };
-            let normal = match frag.varyings[1] {
+            // 插值得到的顶点法线（无 normal map 时的光照法线）
+            let vertex_normal = match frag.varyings[1] {
                 Varying::Vec3(normal) => normal.normalize(),
                 _ => unreachable!("second varying must be normal"),
             };
 
-            let ambient_light_strength = 0.1;
+            let texcoord = match frag.varyings[2] {
+                Varying::Vec2(texcoord) => texcoord,
+                _ => unreachable!("third varying must be texcoord"),
+            };
+
+            // 采样法线贴图：颜色通道 [0,1] 需解码为方向 [-1,1]（object-space 法线贴图）
+            let normal = match uniforms.normal_tex {
+                Some(normal_image) => {
+                    let x = ((texcoord.x.clamp(0.0, 1.0) * normal_image.width() as f32) as usize)
+                        .min(normal_image.width() - 1);
+                    let y = ((texcoord.y.clamp(0.0, 1.0) * normal_image.height() as f32) as usize)
+                        .min(normal_image.height() - 1);
+
+                    if let Some(normal_color) = normal_image.get(x, y) {
+                        (normal_color.to_RGB() * 2.0 - Vec3::splat(1.0)).normalize()
+                    } else {
+                        vertex_normal
+                    }
+                }
+                None => vertex_normal,
+            };
+
+            let ambient_light_strength = 0.2;
             let ambient = ambient_light_strength * uniforms.ambient_color;
 
             let diff = f32::max(normal.dot(uniforms.light_dir), 0.0);
             let diffuse = diff * uniforms.diffuse_color;
 
-            let specular_light_strength = 1.0;
+            let specular_light_strength = 0.8;
             let halfway_dir = (uniforms.light_dir + uniforms.view_dir).normalize();
             let spec = f32::powi(f32::max(normal.dot(halfway_dir), 0.0), 32);
             let specular = specular_light_strength * spec * uniforms.specular_color;
@@ -435,6 +459,88 @@ impl<'a> RenderPipleline<'a> {
 pub struct VertexInput {
     pub pos: Vec3,
     pub varyings: Vec<Varying>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::framebuffer::FrameBuffer;
+
+    /// 构造一个覆盖屏幕中心的大三角形，法线朝 +z（相机方向）
+    fn fullscreen_triangle() -> Vec<VertexInput> {
+        let white = TGAColor::new(1.0, 1.0, 1.0, 1.0);
+        vec![
+            VertexInput {
+                pos: Vec3::new(-0.8, -0.8, 0.0),
+                varyings: vec![
+                    Varying::Color(white),
+                    Varying::Vec3(Vec3::new(0.0, 0.0, 1.0)),
+                    Varying::Vec2(Vec2::new(0.5, 0.5)),
+                ],
+            },
+            VertexInput {
+                pos: Vec3::new(0.8, -0.8, 0.0),
+                varyings: vec![
+                    Varying::Color(white),
+                    Varying::Vec3(Vec3::new(0.0, 0.0, 1.0)),
+                    Varying::Vec2(Vec2::new(0.5, 0.5)),
+                ],
+            },
+            VertexInput {
+                pos: Vec3::new(0.0, 0.8, 0.0),
+                varyings: vec![
+                    Varying::Color(white),
+                    Varying::Vec3(Vec3::new(0.0, 0.0, 1.0)),
+                    Varying::Vec2(Vec2::new(0.5, 0.5)),
+                ],
+            },
+        ]
+    }
+
+    /// light/view 都沿 +z：half 向量 = +z，与法线完全对齐 → Blinn-Phong 高光最强
+    fn light_uniforms(specular_color: Vec3) -> Uniforms<'static> {
+        Uniforms {
+            model: Mat4::IDENTITY,
+            view: Mat4::IDENTITY,
+            projection: Mat4::IDENTITY,
+            model_view: Mat4::IDENTITY,
+            model_view_proj: Mat4::IDENTITY,
+            normal_matrix: Mat3::IDENTITY,
+            light_dir: Vec3::new(0.0, 0.0, 1.0),
+            view_dir: Vec3::new(0.0, 0.0, 1.0),
+            ambient_color: Vec3::new(0.5, 0.5, 0.5),
+            diffuse_color: Vec3::new(0.7, 0.7, 0.7),
+            specular_color,
+            diffuse_tex: None,
+            normal_tex: None,
+            specular_tex: None,
+            glossiness_tex: None,
+        }
+    }
+
+    #[test]
+    fn blinn_phong_specular_produces_highlight() {
+        // 有高光：ambient(0.1) + diffuse(0.7) + specular(0.3) = 1.1 → clamp 到 1.0
+        let mut fb = FrameBuffer::new(100, 100);
+        let mut pipeline = RenderPipleline::new(&mut fb);
+        pipeline.set_draw_mode(PolygonMode::FILL);
+        pipeline.draw(&fullscreen_triangle(), &light_uniforms(Vec3::new(0.3, 0.3, 0.3)));
+        let lit = fb.get(50, 50).unwrap();
+        assert!(lit.r > 0.95, "高光区域应接近白色, got {}", lit.r);
+
+        // 无高光：只有 ambient(0.1) + diffuse(0.7) = 0.8
+        let mut fb2 = FrameBuffer::new(100, 100);
+        let mut pipeline2 = RenderPipleline::new(&mut fb2);
+        pipeline2.set_draw_mode(PolygonMode::FILL);
+        pipeline2.draw(&fullscreen_triangle(), &light_uniforms(Vec3::ZERO));
+        let unlit = fb2.get(50, 50).unwrap();
+        assert!(
+            (unlit.r - 0.8).abs() < 0.02,
+            "无高光时应约为 0.8, got {}",
+            unlit.r
+        );
+        assert!(lit.r > unlit.r + 0.1, "高光应让像素明显更亮");
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -14,7 +14,8 @@ use std::time::Instant;
 use model::Model;
 use renderpipeline::{RenderPipleline, Uniforms, VertexInput, Varying};
 
-use crate::drawline::WHITE;
+use crate::drawline::TGAImageType::RGB;
+use crate::drawline::{TGAImage, WHITE};
 use crate::framebuffer::FrameBuffer;
 use crate::renderpipeline::{lookat, projection};
 use crate::tgaimage::TGAColor;
@@ -35,6 +36,11 @@ fn run() {
     .into_iter()
     .flatten()
     .collect();
+
+    
+    let mut normal_texture = TGAImage::new(1024, 1024, RGB);
+    normal_texture.read_tga_file("assert/african_head/african_head_nm.tga").unwrap();
+    normal_texture.flip_vertically();
 
     let width = 800;
     let height = 800;
@@ -125,7 +131,7 @@ fn run() {
             diffuse_color: Vec3::new(0.7, 0.7, 0.7),
             specular_color: Vec3::new(0.3, 0.3, 0.3),
             diffuse_tex: None,
-            normal_tex: None,
+            normal_tex: Some(&normal_texture),
             specular_tex: None,
             glossiness_tex: None,
         };
@@ -198,4 +204,86 @@ fn load_model(path: &str) -> Option<Vec<VertexInput>> {
         vertices.len() / 3
     );
     Some(vertices)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::Vec3;
+
+    /// 离屏渲染真实模型：修复高光后，画面应出现明显亮于漫反射上限的像素
+    #[test]
+    fn render_african_head_has_specular_highlight() {
+        let verts = load_model("assert/african_head/african_head.obj").unwrap();
+
+        let mut normal_texture = TGAImage::new(1024, 1024, RGB);
+        normal_texture
+            .read_tga_file("assert/african_head/african_head_nm.tga")
+            .unwrap();
+        normal_texture.flip_vertically();
+
+        let width = 400;
+        let height = 400;
+        let eye = Vec3::new(0.0, 0.0, 2.5);
+        let center = Vec3::ZERO;
+        let up = Vec3::Y;
+        let model_mat = Mat4::IDENTITY;
+
+        let proj_mat = projection(
+            renderpipeline::ProjectionMode::PERSPECTIVE,
+            std::f32::consts::FRAC_PI_4,
+            Vec2::new(width as f32, height as f32),
+            0.1,
+            10.0,
+        );
+        let view_mat = lookat(&eye, &center, &up);
+        let uniforms = Uniforms {
+            model: model_mat,
+            view: view_mat,
+            projection: proj_mat,
+            model_view: view_mat * model_mat,
+            model_view_proj: proj_mat * view_mat * model_mat,
+            normal_matrix: Mat3::from_mat4(model_mat.inverse().transpose()),
+            light_dir: Vec3::new(-1.0, 1.0, 1.0).normalize(),
+            view_dir: (eye - center).normalize(),
+            ambient_color: Vec3::new(0.5, 0.5, 0.5),
+            diffuse_color: Vec3::new(0.7, 0.7, 0.7),
+            specular_color: Vec3::new(0.3, 0.3, 0.3),
+            diffuse_tex: None,
+            normal_tex: Some(&normal_texture),
+            specular_tex: None,
+            glossiness_tex: None,
+        };
+
+        let mut framebuffer = FrameBuffer::new(width, height);
+        let mut pipeline = RenderPipleline::new(&mut framebuffer);
+        pipeline.set_draw_mode(renderpipeline::PolygonMode::FILL);
+        pipeline.clear_buffer(&TGAColor::new(0.0, 0.0, 0.0, 1.0));
+        pipeline.begin_frame();
+        pipeline.draw(&verts, &uniforms);
+
+        // 统计亮度高于漫反射上限（ambient 0.2*0.5 + diffuse 0.7*0.7 = 0.59）的像素数
+        // 这些像素只能来自 specular 贡献
+        let mut bright_pixels = 0usize;
+        let mut drawn_pixels = 0usize;
+        for y in 0..height {
+            for x in 0..width {
+                if let Some(c) = framebuffer.get(x, y) {
+                    let lum = c.r.max(c.g).max(c.b);
+                    if lum > 0.0 {
+                        drawn_pixels += 1;
+                    }
+                    if lum > 0.62 {
+                        bright_pixels += 1;
+                    }
+                }
+            }
+        }
+        assert!(drawn_pixels > 1000, "模型应被正常渲染, drawn={}", drawn_pixels);
+        assert!(
+            bright_pixels > 100,
+            "高光缺失: 亮度>0.62 的像素仅 {} 个",
+            bright_pixels
+        );
+    }
 }
