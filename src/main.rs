@@ -38,9 +38,31 @@ fn run() {
     .collect();
 
     
+    // body texture
     let mut normal_texture = TGAImage::new(1024, 1024, RGB);
     normal_texture.read_tga_file("assert/african_head/african_head_nm.tga").unwrap();
     normal_texture.flip_vertically();
+
+    let mut diffuse_texture = TGAImage::new(1024, 1024, RGB);
+    diffuse_texture.read_tga_file("assert/african_head/african_head_diffuse.tga").unwrap();
+    diffuse_texture.flip_vertically();
+
+    // eye texture
+    let mut eye_inner_normal_texture = TGAImage::new(256, 256, RGB);
+    eye_inner_normal_texture.read_tga_file("assert/african_head/african_head_eye_inner_nm.tga").unwrap();
+    eye_inner_normal_texture.flip_vertically();
+
+    let mut eye_inner_diffuse_texture = TGAImage::new( 256, 256, RGB);
+    eye_inner_diffuse_texture.read_tga_file("assert/african_head/african_head_eye_inner_diffuse.tga").unwrap();
+    eye_inner_diffuse_texture.flip_vertically();
+
+    let mut eye_outer_normal_texture = TGAImage::new(256, 256, RGB);
+    eye_outer_normal_texture.read_tga_file("assert/african_head/african_head_eye_outer_nm.tga").unwrap();
+    eye_outer_normal_texture.flip_vertically();
+
+    let mut eye_outer_diffuse_texture = TGAImage::new(256, 256, RGB);
+    eye_outer_diffuse_texture.read_tga_file("assert/african_head/african_head_eye_outer_diffuse.tga").unwrap();
+    eye_outer_diffuse_texture.flip_vertically();
 
     let width = 800;
     let height = 800;
@@ -118,7 +140,7 @@ fn run() {
         // view_dir: 从表面指向相机的方向 → 用于 Blinn-Phong 半向量
         let view_dir = (eye - center).normalize();
 
-        let uniforms = Uniforms {
+        let mut uniforms = Uniforms {
             model: model_mat,
             view: view_mat,
             projection: proj_mat,
@@ -130,7 +152,7 @@ fn run() {
             ambient_color: Vec3::new(0.5, 0.5, 0.5),
             diffuse_color: Vec3::new(0.7, 0.7, 0.7),
             specular_color: Vec3::new(0.3, 0.3, 0.3),
-            diffuse_tex: None,
+            diffuse_tex: Some(&diffuse_texture),
             normal_tex: Some(&normal_texture),
             specular_tex: None,
             glossiness_tex: None,
@@ -140,9 +162,22 @@ fn run() {
         pipeline.clear_buffer(&bg_color);
         pipeline.begin_frame();
 
-        for verts in &vertexs_data {
-            pipeline.draw(verts, &uniforms);
-        }
+        // for verts in &vertexs_data {
+        //     pipeline.draw(verts, &uniforms);
+        // }
+
+        // draw head
+        pipeline.draw(&vertexs_data[0], &uniforms);
+
+        // draw inner eye（虹膜，不透明，先画）
+        uniforms.normal_tex = Some(&eye_inner_normal_texture);
+        uniforms.diffuse_tex = Some(&eye_inner_diffuse_texture);
+        pipeline.draw(&vertexs_data[1], &uniforms);
+
+        // draw outer eye（角膜，diffuse 贴图带 alpha，半透明，后画以混合出虹膜颜色）
+        uniforms.normal_tex = Some(&eye_outer_normal_texture);
+        uniforms.diffuse_tex = Some(&eye_outer_diffuse_texture);
+        pipeline.draw(&vertexs_data[2], &uniforms);
 
         // ----- 显示 -----
         window

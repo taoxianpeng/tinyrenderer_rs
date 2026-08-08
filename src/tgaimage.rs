@@ -185,6 +185,8 @@ impl TGAImage {
         }
         if self.bpp > 3 {
             c.a = self.data[idx + 3] as f32 / 255.0;
+        } else {
+            c.a = 1.0; // 无 alpha 通道的图像视为完全不透明
         }
         Some(c)
     }

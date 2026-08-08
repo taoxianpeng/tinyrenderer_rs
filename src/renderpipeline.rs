@@ -16,7 +16,7 @@ pub enum PolygonMode {
 pub enum CullMode {
     BACK,
     FRONT,
-    NULL
+    NULL,
 }
 
 pub fn lookat(eye: &Vec3, center: &Vec3, up: &Vec3) -> Mat4 {
@@ -140,8 +140,6 @@ impl<'a> RenderPipleline<'a> {
         self.color_buffer.fill(TGAColor::new(0.0, 0.0, 0.0, 0.0));
     }
 
-
-
     pub fn set_draw_mode(&mut self, mode: PolygonMode) {
         self.polygon_mode = mode;
     }
@@ -218,15 +216,18 @@ impl<'a> RenderPipleline<'a> {
 
     fn vertex_shader<'b>(&self, input: &VertexInput, uniforms: &Uniforms<'b>) -> VertexOutput {
         let pos = uniforms.model_view_proj * input.pos.extend(1.0);
-        
+
         // 获取局部法线
-        let local_normal = match input.varyings[1] { Varying::Vec3(n) => n, _ => unreachable!() };
+        let local_normal = match input.varyings[1] {
+            Varying::Vec3(n) => n,
+            _ => unreachable!(),
+        };
         // 变换到世界空间
         let world_normal = uniforms.normal_matrix * local_normal;
-        
+
         let mut varyings = input.varyings.clone();
         varyings[1] = Varying::Vec3(world_normal);
-        
+
         VertexOutput { pos, varyings }
     }
 
@@ -418,14 +419,29 @@ impl<'a> RenderPipleline<'a> {
                 }
                 None => vertex_normal,
             };
+            // 采样漫反射贴图（同时取出 alpha，供透明混合使用）
+            let (diffuse_color, tex_alpha) = match uniforms.diffuse_tex {
+                Some(diffuse_tex) => {
+                    let x = ((texcoord.x.clamp(0.0, 1.0) * diffuse_tex.width() as f32) as usize)
+                        .min(diffuse_tex.width() - 1);
+                    let y = ((texcoord.y.clamp(0.0, 1.0) * diffuse_tex.height() as f32) as usize)
+                        .min(diffuse_tex.height() - 1);
+                    if let Some(diffuse_color) = diffuse_tex.get(x, y) {
+                        (diffuse_color.to_RGB(), diffuse_color.a)
+                    } else {
+                        (uniforms.diffuse_color, 1.0)
+                    }
+                }
+                None => (uniforms.diffuse_color, 1.0),
+            };
 
-            let ambient_light_strength = 0.2;
+            let ambient_light_strength = 0.4;
             let ambient = ambient_light_strength * uniforms.ambient_color;
 
             let diff = f32::max(normal.dot(uniforms.light_dir), 0.0);
-            let diffuse = diff * uniforms.diffuse_color;
+            let diffuse = diff * diffuse_color;
 
-            let specular_light_strength = 0.8;
+            let specular_light_strength = 1.0;
             let halfway_dir = (uniforms.light_dir + uniforms.view_dir).normalize();
             let spec = f32::powi(f32::max(normal.dot(halfway_dir), 0.0), 32);
             let specular = specular_light_strength * spec * uniforms.specular_color;
@@ -438,8 +454,32 @@ impl<'a> RenderPipleline<'a> {
                 rate.z * color.b,
                 color.a,
             );
+
+            // alpha 混合（"over" 合成）：半透明片段（如 eye_outer 的角膜）
+            // 按 alpha 与帧缓冲中已绘制的内容混合，而非直接覆盖
+            let final_color = if tex_alpha < 1.0 {
+                match self
+                    .framebuffer
+                    .get(frag.pos.x as usize, frag.pos.y as usize)
+                {
+                    Some(dst) => {
+                        let inv = 1.0 - tex_alpha;
+                        TGAColor::new(
+                            lit_color.r * tex_alpha + dst.r * inv,
+                            lit_color.g * tex_alpha + dst.g * inv,
+                            lit_color.b * tex_alpha + dst.b * inv,
+                            1.0,
+                        )
+                    }
+                    None => lit_color,
+                }
+            } else {
+                lit_color
+            };
+
             // self.color_buffer[i] = lit_color; // 旧路径：先写 color_buffer，再由 ROP 复制到 framebuffer
-            self.framebuffer.set(frag.pos.x as usize, frag.pos.y as usize, &lit_color);
+            self.framebuffer
+                .set(frag.pos.x as usize, frag.pos.y as usize, &final_color);
         }
     }
 
@@ -508,7 +548,8 @@ mod tests {
             normal_matrix: Mat3::IDENTITY,
             light_dir: Vec3::new(0.0, 0.0, 1.0),
             view_dir: Vec3::new(0.0, 0.0, 1.0),
-            ambient_color: Vec3::new(0.5, 0.5, 0.5),
+            // ambient 置零：断言不依赖环境光强度常量
+            ambient_color: Vec3::ZERO,
             diffuse_color: Vec3::new(0.7, 0.7, 0.7),
             specular_color,
             diffuse_tex: None,
@@ -520,23 +561,26 @@ mod tests {
 
     #[test]
     fn blinn_phong_specular_produces_highlight() {
-        // 有高光：ambient(0.1) + diffuse(0.7) + specular(0.3) = 1.1 → clamp 到 1.0
+        // 有高光：ambient(0) + diffuse(0.7) + specular(0.3) = 1.0
         let mut fb = FrameBuffer::new(100, 100);
         let mut pipeline = RenderPipleline::new(&mut fb);
         pipeline.set_draw_mode(PolygonMode::FILL);
-        pipeline.draw(&fullscreen_triangle(), &light_uniforms(Vec3::new(0.3, 0.3, 0.3)));
+        pipeline.draw(
+            &fullscreen_triangle(),
+            &light_uniforms(Vec3::new(0.3, 0.3, 0.3)),
+        );
         let lit = fb.get(50, 50).unwrap();
         assert!(lit.r > 0.95, "高光区域应接近白色, got {}", lit.r);
 
-        // 无高光：只有 ambient(0.1) + diffuse(0.7) = 0.8
+        // 无高光：只有 ambient(0) + diffuse(0.7) = 0.7
         let mut fb2 = FrameBuffer::new(100, 100);
         let mut pipeline2 = RenderPipleline::new(&mut fb2);
         pipeline2.set_draw_mode(PolygonMode::FILL);
         pipeline2.draw(&fullscreen_triangle(), &light_uniforms(Vec3::ZERO));
         let unlit = fb2.get(50, 50).unwrap();
         assert!(
-            (unlit.r - 0.8).abs() < 0.02,
-            "无高光时应约为 0.8, got {}",
+            (unlit.r - 0.7).abs() < 0.02,
+            "无高光时应约为 0.7, got {}",
             unlit.r
         );
         assert!(lit.r > unlit.r + 0.1, "高光应让像素明显更亮");

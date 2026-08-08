@@ -5,6 +5,11 @@ pub trait FrameBufferTarget {
     fn set(&mut self, x: usize, y: usize, color: &TGAColor);
     fn width(&self) -> usize;
     fn height(&self) -> usize;
+    /// 读取 (x, y) 处已有颜色，供 alpha 混合使用（不支持的实现返回 None）
+    fn get(&self, x: usize, y: usize) -> Option<TGAColor> {
+        let _ = (x, y);
+        None
+    }
     /// 清空帧缓冲为指定颜色（默认逐像素 set，可重写为更快的 bulk 操作）
     fn clear(&mut self, color: &TGAColor) {
         for y in 0..self.height() {
@@ -100,6 +105,10 @@ impl FrameBuffer {
 impl FrameBufferTarget for FrameBuffer {
     fn set(&mut self, x: usize, y: usize, color: &TGAColor) {
         self.set(x, y, color);
+    }
+
+    fn get(&self, x: usize, y: usize) -> Option<TGAColor> {
+        self.get(x, y)
     }
 
     fn width(&self) -> usize {
