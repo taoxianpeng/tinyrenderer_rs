@@ -208,10 +208,11 @@ impl<'a> RenderPipleline<'a> {
         }
 
         if let Some(filtered_frags) = self.depth_test(fragment_inputs) {
-            self.fragment_shader(uniforms, filtered_frags);
+            for frag in filtered_frags {
+                let color = self.fragment_shader(uniforms, &frag);
+                self.raster_operations(frag.pos.x as usize, frag.pos.y as usize, color);
+            }
         }
-
-        // self.raster_operations(); // 已改为 fragment_shader 直写 framebuffer
     }
 
     fn vertex_shader<'b>(&self, input: &VertexInput, uniforms: &Uniforms<'b>) -> VertexOutput {
@@ -384,114 +385,90 @@ impl<'a> RenderPipleline<'a> {
         }
     }
 
-    fn fragment_shader<'b>(&mut self, uniforms: &Uniforms<'b>, frags: Vec<FragmentInput>) {
-        for frag in frags {
-            let i = frag.pos.y as usize * self.w + frag.pos.x as usize;
+    fn fragment_shader<'b>(&mut self, uniforms: &Uniforms<'b>, frag: &FragmentInput) -> TGAColor {
+        // let color = match frag.varyings[0] {
+        //     Varying::Color(color) => color,
+        //     _ => unreachable!("first varying must be color"),
+        // };
+        // 插值得到的顶点法线（无 normal map 时的光照法线）
+        let vertex_normal = match frag.varyings[1] {
+            Varying::Vec3(normal) => normal.normalize(),
+            _ => unreachable!("second varying must be normal"),
+        };
 
-            let color = match frag.varyings[0] {
-                Varying::Color(color) => color,
-                _ => unreachable!("first varying must be color"),
-            };
-            // 插值得到的顶点法线（无 normal map 时的光照法线）
-            let vertex_normal = match frag.varyings[1] {
-                Varying::Vec3(normal) => normal.normalize(),
-                _ => unreachable!("second varying must be normal"),
-            };
+        let texcoord = match frag.varyings[2] {
+            Varying::Vec2(texcoord) => texcoord,
+            _ => unreachable!("third varying must be texcoord"),
+        };
 
-            let texcoord = match frag.varyings[2] {
-                Varying::Vec2(texcoord) => texcoord,
-                _ => unreachable!("third varying must be texcoord"),
-            };
+        // 采样法线贴图：颜色通道 [0,1] 需解码为方向 [-1,1]（object-space 法线贴图）
+        let normal = match uniforms.normal_tex {
+            Some(normal_image) => {
+                let x = ((texcoord.x.clamp(0.0, 1.0) * normal_image.width() as f32) as usize)
+                    .min(normal_image.width() - 1);
+                let y = ((texcoord.y.clamp(0.0, 1.0) * normal_image.height() as f32) as usize)
+                    .min(normal_image.height() - 1);
 
-            // 采样法线贴图：颜色通道 [0,1] 需解码为方向 [-1,1]（object-space 法线贴图）
-            let normal = match uniforms.normal_tex {
-                Some(normal_image) => {
-                    let x = ((texcoord.x.clamp(0.0, 1.0) * normal_image.width() as f32) as usize)
-                        .min(normal_image.width() - 1);
-                    let y = ((texcoord.y.clamp(0.0, 1.0) * normal_image.height() as f32) as usize)
-                        .min(normal_image.height() - 1);
-
-                    if let Some(normal_color) = normal_image.get(x, y) {
-                        (normal_color.to_RGB() * 2.0 - Vec3::splat(1.0)).normalize()
-                    } else {
-                        vertex_normal
-                    }
+                if let Some(normal_color) = normal_image.get(x, y) {
+                    (normal_color.to_RGB() * 2.0 - Vec3::splat(1.0)).normalize()
+                } else {
+                    vertex_normal
                 }
-                None => vertex_normal,
-            };
-            // 采样漫反射贴图（同时取出 alpha，供透明混合使用）
-            let (diffuse_color, tex_alpha) = match uniforms.diffuse_tex {
-                Some(diffuse_tex) => {
-                    let x = ((texcoord.x.clamp(0.0, 1.0) * diffuse_tex.width() as f32) as usize)
-                        .min(diffuse_tex.width() - 1);
-                    let y = ((texcoord.y.clamp(0.0, 1.0) * diffuse_tex.height() as f32) as usize)
-                        .min(diffuse_tex.height() - 1);
-                    if let Some(diffuse_color) = diffuse_tex.get(x, y) {
-                        (diffuse_color.to_RGB(), diffuse_color.a)
-                    } else {
-                        (uniforms.diffuse_color, 1.0)
-                    }
+            }
+            None => vertex_normal,
+        };
+        // 采样漫反射贴图（同时取出 alpha，供透明混合使用）
+        let (diffuse_color, diffuse_alpha) = match uniforms.diffuse_tex {
+            Some(diffuse_tex) => {
+                let x = ((texcoord.x.clamp(0.0, 1.0) * diffuse_tex.width() as f32) as usize)
+                    .min(diffuse_tex.width() - 1);
+                let y = ((texcoord.y.clamp(0.0, 1.0) * diffuse_tex.height() as f32) as usize)
+                    .min(diffuse_tex.height() - 1);
+                if let Some(diffuse_color) = diffuse_tex.get(x, y) {
+                    (diffuse_color.to_RGB(), diffuse_color.a)
+                } else {
+                    (uniforms.diffuse_color, 1.0)
                 }
-                None => (uniforms.diffuse_color, 1.0),
-            };
+            }
+            None => (uniforms.diffuse_color, 1.0),
+        };
 
-            let ambient_light_strength = 0.4;
-            let ambient = ambient_light_strength * uniforms.ambient_color;
+        let ambient_light_strength = 0.4;
+        let ambient = ambient_light_strength * uniforms.ambient_color;
 
-            let diff = f32::max(normal.dot(uniforms.light_dir), 0.0);
-            let diffuse = diff * diffuse_color;
+        let diff = f32::max(normal.dot(uniforms.light_dir), 0.0);
+        let diffuse = diff * diffuse_color;
 
-            let specular_light_strength = 1.0;
-            let halfway_dir = (uniforms.light_dir + uniforms.view_dir).normalize();
-            let spec = f32::powi(f32::max(normal.dot(halfway_dir), 0.0), 32);
-            let specular = specular_light_strength * spec * uniforms.specular_color;
+        let specular_light_strength = 1.0;
+        let halfway_dir = (uniforms.light_dir + uniforms.view_dir).normalize();
+        let spec = f32::powi(f32::max(normal.dot(halfway_dir), 0.0), 32);
+        let specular = specular_light_strength * spec * uniforms.specular_color;
 
-            let rate = ambient + diffuse + specular;
+        let color_t = ambient + diffuse + specular;
 
-            let lit_color = TGAColor::new(
-                rate.x * color.r,
-                rate.y * color.g,
-                rate.z * color.b,
-                color.a,
-            );
+        TGAColor::new(color_t.x, color_t.y, color_t.z, diffuse_alpha)
 
-            // alpha 混合（"over" 合成）：半透明片段（如 eye_outer 的角膜）
-            // 按 alpha 与帧缓冲中已绘制的内容混合，而非直接覆盖
-            let final_color = if tex_alpha < 1.0 {
-                match self
-                    .framebuffer
-                    .get(frag.pos.x as usize, frag.pos.y as usize)
-                {
-                    Some(dst) => {
-                        let inv = 1.0 - tex_alpha;
-                        TGAColor::new(
-                            lit_color.r * tex_alpha + dst.r * inv,
-                            lit_color.g * tex_alpha + dst.g * inv,
-                            lit_color.b * tex_alpha + dst.b * inv,
-                            1.0,
-                        )
-                    }
-                    None => lit_color,
-                }
-            } else {
-                lit_color
-            };
-
-            // self.color_buffer[i] = lit_color; // 旧路径：先写 color_buffer，再由 ROP 复制到 framebuffer
-            self.framebuffer
-                .set(frag.pos.x as usize, frag.pos.y as usize, &final_color);
-        }
     }
 
-    // fn raster_operations(&mut self) {
-    //     for y in 0..self.h {
-    //         for x in 0..self.w {
-    //             let index = y * self.w + x;
-    //             let c = self.color_buffer[index];
-    //             self.framebuffer.set(x, y, &c);
-    //         }
-    //     }
-    // }
+    fn raster_operations(&mut self, x: usize, y: usize, color: TGAColor) {
+        // mix color
+        let src_color = self.framebuffer.get(x, y);
+        let dst_color = match src_color {
+            Some(s_color) => {
+                TGAColor::new(
+                    color.a * color.r + (1.0 - color.a) * s_color.r,
+                    color.a * color.g + (1.0 - color.a) * s_color.g,
+                    color.a * color.b + (1.0 - color.a) * s_color.b,
+                    1.0
+                )
+            }
+            None => {
+                TGAColor::new(color.r, color.g, color.b, 1.0)
+            }
+        };
+        self.framebuffer.set(x, y, &dst_color);
+    }
+
 }
 
 // 输入: 一个顶点的原始属性
