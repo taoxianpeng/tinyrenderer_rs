@@ -4,7 +4,6 @@ use crate::renderpipeline::{ProjectionMode::ORTHO, ProjectionMode::PERSPECTIVE};
 use crate::tgaimage::TGAImage;
 use glam::{IVec2, Mat3, Mat4, Vec2, Vec3, Vec4, vec4};
 use std::cmp::{max, min};
-use std::os::unix::net::UnixStream;
 use std::vec;
 
 pub enum PolygonMode {
