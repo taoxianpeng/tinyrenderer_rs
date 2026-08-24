@@ -1,6 +1,6 @@
-pub type Point2D = glam::IVec2;
 pub use crate::tgaimage::*;
 pub use glam::{IVec2, Vec2};
+pub type Point2D = glam::IVec2;
 
 
 /// DDA 浮点直线绘制 — 接受浮点坐标端点

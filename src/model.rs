@@ -1,11 +1,52 @@
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use glam::Vec3;
+use glam::{Vec2, Vec3};
+
+use crate::drawline::WHITE;
+use crate::renderpipeline::{VertexInput, Varying};
 
 
 pub type VertIndice = [u32; 3];
 pub type Face = Vec<VertIndice>;
+
+/// 从 OBJ 文件组装顶点输入（仅处理三角形面）
+pub fn load_model(path: &str) -> Option<Vec<VertexInput>> {
+    let model: Model = Model::new(Path::new(path));
+    println!(
+        "模型加载成功: {} 顶点, {} 面",
+        model.verts().len() - 1,
+        model.faces().len() - 1,
+    );
+
+    let mut vertices: Vec<VertexInput> = Vec::new();
+    for face in model.faces() {
+        if face.len() == 3 {
+            for idx in face {
+                let pos = model.verts()[idx[0] as usize];
+                let normal = model.vert_normals()[idx[2] as usize];
+                let texcoord = {
+                    let vt = model.texture_verts()[idx[1] as usize];
+                    Vec2::new(vt.x, vt.y)
+                };
+                vertices.push(VertexInput {
+                    pos,
+                    varyings: vec![
+                        Varying::Color(WHITE),
+                        Varying::Vec3(normal),
+                        Varying::Vec2(texcoord),
+                    ],
+                });
+            }
+        }
+    }
+    println!(
+        "组装 {} 个顶点输入 ({} 个三角形)",
+        vertices.len(),
+        vertices.len() / 3
+    );
+    Some(vertices)
+}
 
 pub struct Model {
     verts: Vec<Vec3>,
