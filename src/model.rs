@@ -1,9 +1,8 @@
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
-use std::mem::zeroed;
 use std::path::Path;
+use glam::Vec3;
 
-use crate::datatype::Vec3;
 
 pub type VertIndice = [u32; 3];
 pub type Face = Vec<VertIndice>;

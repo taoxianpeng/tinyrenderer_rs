@@ -1,10 +1,9 @@
 use std::cmp::{max, min};
+pub use glam::{IVec2, Vec2};
+pub type Point2D = glam::IVec2;
 
-use crate::datatype::Point2D;
 pub use crate::drawline::{Bresenham, DDA};
 pub use crate::tgaimage::{TGAColor, TGAImage, TGAImageType};
-use glam::{IVec2, Vec2};
-
 pub struct DrawTriangleFloat;
 
 impl DrawTriangleFloat {

@@ -1,4 +1,3 @@
-mod datatype;
 mod drawline;
 mod drawtriangle;
 mod model;

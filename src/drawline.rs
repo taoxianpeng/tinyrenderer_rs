@@ -1,4 +1,4 @@
-pub use crate::datatype::Point2D;
+pub type Point2D = glam::IVec2;
 pub use crate::tgaimage::*;
 pub use glam::{IVec2, Vec2};
 
