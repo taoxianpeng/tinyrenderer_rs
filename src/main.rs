@@ -79,7 +79,9 @@ fn run() {
     pipeline.set_cull_mode(renderpipeline::CullMode::BACK);
     pipeline.set_draw_mode(renderpipeline::PolygonMode::FILL);
 
-    // 投影矩阵（不变）
+    pipeline.set_vertex_shader(renderpipeline::default_vertex_shader);
+    pipeline.set_fragment_shader(renderpipeline::default_fragment_shader);
+
     let proj_mat = projection(
         renderpipeline::ProjectionMode::PERSPECTIVE,
         std::f32::consts::FRAC_PI_4,

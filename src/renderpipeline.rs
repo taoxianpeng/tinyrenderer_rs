@@ -105,6 +105,91 @@ fn is_in_edge(p: &IVec2, v_start: &IVec2, v_end: &IVec2) -> bool {
     return (p.x >= v_start.x && p.x <= v_end.x) && (p.y >= v_start.y && p.y <= v_end.y);
 }
 
+pub type VertexShader = fn(&Uniforms<'_>, &VertexInput) -> VertexOutput;
+pub type FragmentShader = fn(&Uniforms<'_>, &FragmentInput) -> TGAColor;
+
+pub fn default_vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOutput {
+    let pos = uniforms.model_view_proj * input.pos.extend(1.0);
+
+    // 获取局部法线
+    let local_normal = match input.varyings[1] {
+        Varying::Vec3(n) => n,
+        _ => unreachable!(),
+    };
+    // 变换到世界空间
+    let world_normal = uniforms.normal_matrix * local_normal;
+
+    let mut varyings = input.varyings.clone();
+    varyings[1] = Varying::Vec3(world_normal);
+
+    VertexOutput { pos, varyings }
+}
+
+pub fn default_fragment_shader(uniforms: &Uniforms, frag: &FragmentInput) -> TGAColor {
+    // let color = match frag.varyings[0] {
+    //     Varying::Color(color) => color,
+    //     _ => unreachable!("first varying must be color"),
+    // };
+    // 插值得到的顶点法线（无 normal map 时的光照法线）
+    let vertex_normal = match frag.varyings[1] {
+        Varying::Vec3(normal) => normal.normalize(),
+        _ => unreachable!("second varying must be normal"),
+    };
+
+    let texcoord = match frag.varyings[2] {
+        Varying::Vec2(texcoord) => texcoord,
+        _ => unreachable!("third varying must be texcoord"),
+    };
+
+    // 采样法线贴图：颜色通道 [0,1] 需解码为方向 [-1,1]（object-space 法线贴图）
+    let normal = match uniforms.normal_tex {
+        Some(normal_image) => {
+            let x = ((texcoord.x.clamp(0.0, 1.0) * normal_image.width() as f32) as usize)
+                .min(normal_image.width() - 1);
+            let y = ((texcoord.y.clamp(0.0, 1.0) * normal_image.height() as f32) as usize)
+                .min(normal_image.height() - 1);
+
+            if let Some(normal_color) = normal_image.get(x, y) {
+                (normal_color.to_RGB() * 2.0 - Vec3::splat(1.0)).normalize()
+            } else {
+                vertex_normal
+            }
+        }
+        None => vertex_normal,
+    };
+    // 采样漫反射贴图（同时取出 alpha，供透明混合使用）
+    let (diffuse_color, diffuse_alpha) = match uniforms.diffuse_tex {
+        Some(diffuse_tex) => {
+            let x = ((texcoord.x.clamp(0.0, 1.0) * diffuse_tex.width() as f32) as usize)
+                .min(diffuse_tex.width() - 1);
+            let y = ((texcoord.y.clamp(0.0, 1.0) * diffuse_tex.height() as f32) as usize)
+                .min(diffuse_tex.height() - 1);
+            if let Some(diffuse_color) = diffuse_tex.get(x, y) {
+                (diffuse_color.to_RGB(), diffuse_color.a)
+            } else {
+                (uniforms.diffuse_color, 1.0)
+            }
+        }
+        None => (uniforms.diffuse_color, 1.0),
+    };
+
+    let ambient_light_strength = 0.4;
+    let ambient = ambient_light_strength * uniforms.ambient_color;
+
+    let diff = f32::max(normal.dot(uniforms.light_dir), 0.0);
+    let diffuse = diff * diffuse_color;
+
+    let specular_light_strength = 1.0;
+    let halfway_dir = (uniforms.light_dir + uniforms.view_dir).normalize();
+    let spec = f32::powi(f32::max(normal.dot(halfway_dir), 0.0), 32);
+    let specular = specular_light_strength * spec * uniforms.specular_color;
+
+    let color_t = ambient + diffuse + specular;
+
+    TGAColor::new(color_t.x, color_t.y, color_t.z, diffuse_alpha)
+
+}
+
 pub struct RenderPipleline<'a> {
     polygon_mode: PolygonMode,
     flat_normal: bool,
@@ -114,6 +199,9 @@ pub struct RenderPipleline<'a> {
     h: usize,
     depth_buffer: Vec<f32>,
     color_buffer: Vec<TGAColor>,
+    // 可注入的着色器回调（默认使用内置 Blinn-Phong 实现）
+    vertex_shader: VertexShader,
+    fragment_shader: FragmentShader,
 }
 
 impl<'a> RenderPipleline<'a> {
@@ -130,6 +218,8 @@ impl<'a> RenderPipleline<'a> {
             h,
             depth_buffer: vec![f32::MAX; total_pixels],
             color_buffer: vec![TGAColor::new(0.0, 0.0, 0.0, 0.0); total_pixels],
+            vertex_shader: default_vertex_shader,
+            fragment_shader: default_fragment_shader,
         }
     }
 
@@ -151,6 +241,16 @@ impl<'a> RenderPipleline<'a> {
         self.cull = mode;
     }
 
+    /// 注入自定义顶点着色器（默认使用内置 Blinn-Phong 顶点着色器）
+    pub fn set_vertex_shader(&mut self, shader: VertexShader) {
+        self.vertex_shader = shader;
+    }
+
+    /// 注入自定义片元着色器（默认使用内置 Blinn-Phong 片元着色器）
+    pub fn set_fragment_shader(&mut self, shader: FragmentShader) {
+        self.fragment_shader = shader;
+    }
+
     /// 获取帧缓冲的 u32 切片供 minifb 显示
     pub fn display_buffer(&self) -> &[u32] {
         self.framebuffer.raw_buffer()
@@ -170,9 +270,9 @@ impl<'a> RenderPipleline<'a> {
                 break; // 不足 3 个顶点，丢弃
             }
 
-            let v0 = self.vertex_shader(&chunk[0], uniforms);
-            let v1 = self.vertex_shader(&chunk[1], uniforms);
-            let v2 = self.vertex_shader(&chunk[2], uniforms);
+            let v0 = (self.vertex_shader)(uniforms, &chunk[0]);
+            let v1 = (self.vertex_shader)(uniforms, &chunk[1]);
+            let v2 = (self.vertex_shader)(uniforms, &chunk[2]);
 
             primitive_array.push([v0, v1, v2]);
         }
@@ -208,28 +308,13 @@ impl<'a> RenderPipleline<'a> {
 
         if let Some(filtered_frags) = self.depth_test(fragment_inputs) {
             for frag in filtered_frags {
-                let color = self.fragment_shader(uniforms, &frag);
+                let color = (self.fragment_shader)(uniforms, &frag);
                 self.raster_operations(frag.pos.x as usize, frag.pos.y as usize, color);
             }
         }
     }
 
-    fn vertex_shader<'b>(&self, input: &VertexInput, uniforms: &Uniforms<'b>) -> VertexOutput {
-        let pos = uniforms.model_view_proj * input.pos.extend(1.0);
 
-        // 获取局部法线
-        let local_normal = match input.varyings[1] {
-            Varying::Vec3(n) => n,
-            _ => unreachable!(),
-        };
-        // 变换到世界空间
-        let world_normal = uniforms.normal_matrix * local_normal;
-
-        let mut varyings = input.varyings.clone();
-        varyings[1] = Varying::Vec3(world_normal);
-
-        VertexOutput { pos, varyings }
-    }
 
     fn primitive_assembly(&self, input: Vec<[VertexOutput; 3]>) -> Vec<PrimitiveOutput> {
         let mut out: Vec<PrimitiveOutput> = Vec::new();
@@ -384,71 +469,6 @@ impl<'a> RenderPipleline<'a> {
         }
     }
 
-    fn fragment_shader<'b>(&mut self, uniforms: &Uniforms<'b>, frag: &FragmentInput) -> TGAColor {
-        // let color = match frag.varyings[0] {
-        //     Varying::Color(color) => color,
-        //     _ => unreachable!("first varying must be color"),
-        // };
-        // 插值得到的顶点法线（无 normal map 时的光照法线）
-        let vertex_normal = match frag.varyings[1] {
-            Varying::Vec3(normal) => normal.normalize(),
-            _ => unreachable!("second varying must be normal"),
-        };
-
-        let texcoord = match frag.varyings[2] {
-            Varying::Vec2(texcoord) => texcoord,
-            _ => unreachable!("third varying must be texcoord"),
-        };
-
-        // 采样法线贴图：颜色通道 [0,1] 需解码为方向 [-1,1]（object-space 法线贴图）
-        let normal = match uniforms.normal_tex {
-            Some(normal_image) => {
-                let x = ((texcoord.x.clamp(0.0, 1.0) * normal_image.width() as f32) as usize)
-                    .min(normal_image.width() - 1);
-                let y = ((texcoord.y.clamp(0.0, 1.0) * normal_image.height() as f32) as usize)
-                    .min(normal_image.height() - 1);
-
-                if let Some(normal_color) = normal_image.get(x, y) {
-                    (normal_color.to_RGB() * 2.0 - Vec3::splat(1.0)).normalize()
-                } else {
-                    vertex_normal
-                }
-            }
-            None => vertex_normal,
-        };
-        // 采样漫反射贴图（同时取出 alpha，供透明混合使用）
-        let (diffuse_color, diffuse_alpha) = match uniforms.diffuse_tex {
-            Some(diffuse_tex) => {
-                let x = ((texcoord.x.clamp(0.0, 1.0) * diffuse_tex.width() as f32) as usize)
-                    .min(diffuse_tex.width() - 1);
-                let y = ((texcoord.y.clamp(0.0, 1.0) * diffuse_tex.height() as f32) as usize)
-                    .min(diffuse_tex.height() - 1);
-                if let Some(diffuse_color) = diffuse_tex.get(x, y) {
-                    (diffuse_color.to_RGB(), diffuse_color.a)
-                } else {
-                    (uniforms.diffuse_color, 1.0)
-                }
-            }
-            None => (uniforms.diffuse_color, 1.0),
-        };
-
-        let ambient_light_strength = 0.4;
-        let ambient = ambient_light_strength * uniforms.ambient_color;
-
-        let diff = f32::max(normal.dot(uniforms.light_dir), 0.0);
-        let diffuse = diff * diffuse_color;
-
-        let specular_light_strength = 1.0;
-        let halfway_dir = (uniforms.light_dir + uniforms.view_dir).normalize();
-        let spec = f32::powi(f32::max(normal.dot(halfway_dir), 0.0), 32);
-        let specular = specular_light_strength * spec * uniforms.specular_color;
-
-        let color_t = ambient + diffuse + specular;
-
-        TGAColor::new(color_t.x, color_t.y, color_t.z, diffuse_alpha)
-
-    }
-
     fn raster_operations(&mut self, x: usize, y: usize, color: TGAColor) {
         // mix color
         let src_color = self.framebuffer.get(x, y);
@@ -564,9 +584,9 @@ mod tests {
 }
 
 #[derive(Clone, Debug)]
-struct VertexOutput {
-    pos: Vec4,
-    varyings: Vec<Varying>,
+pub struct VertexOutput {
+    pub pos: Vec4,
+    pub varyings: Vec<Varying>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -662,7 +682,7 @@ fn draw_line(target: &mut dyn FrameBufferTarget, p0: &IVec2, p1: &IVec2, color: 
 }
 
 #[derive(Default)]
-struct FragmentInput {
+pub struct FragmentInput {
     pub pos: IVec2,
     pub depth: f32,
     pub varyings: Vec<Varying>,
