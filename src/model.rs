@@ -1,17 +1,16 @@
-use std::fs::{self, File};
+use glam::{Vec2, Vec3};
+use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use glam::{Vec2, Vec3};
 
 use crate::drawline::WHITE;
-use crate::renderpipeline::{VertexInput, Varying};
-
+use crate::renderpipeline::{Varying, VertexInput};
 
 pub type VertIndice = [u32; 3];
 pub type Face = Vec<VertIndice>;
 
 /// 从 OBJ 文件组装顶点输入（仅处理三角形面）
-pub fn load_model(path: &str) -> Option<Vec<VertexInput>> {
+pub fn load_model(path: &str, enable_tbn: bool) -> Option<Vec<VertexInput>> {
     let model: Model = Model::new(Path::new(path));
     println!(
         "模型加载成功: {} 顶点, {} 面",
@@ -22,6 +21,46 @@ pub fn load_model(path: &str) -> Option<Vec<VertexInput>> {
     let mut vertices: Vec<VertexInput> = Vec::new();
     for face in model.faces() {
         if face.len() == 3 {
+            // 求切线空间中TBN矩阵的T：每个三角形一份，写进该三角形的 3 个顶点
+            let t_vec = match enable_tbn {
+                true => {
+                    let pos_index_1 = face[0][0];
+                    let uv_index_1 = face[0][1];
+                    let p1 = model.verts()[pos_index_1 as usize];
+                    let uv1 = model.texture_verts()[uv_index_1 as usize].truncate();
+
+                    let pos_index_2 = face[1][0];
+                    let uv_index_2 = face[1][1];
+                    let p2 = model.verts()[pos_index_2 as usize];
+                    let uv2 = model.texture_verts()[uv_index_2 as usize].truncate();
+
+                    let pos_index_3 = face[2][0];
+                    let uv_index_3 = face[2][1];
+                    let p3 = model.verts()[pos_index_3 as usize];
+                    let uv3 = model.texture_verts()[uv_index_3 as usize].truncate();
+
+                    let edge1 = p2 - p1;
+                    let edge2 = p3 - p1;
+                    let delta_uv1 = uv2 - uv1;
+                    let delta_u1 = delta_uv1.x;
+                    let delta_v1 = delta_uv1.y;
+                    let delta_uv2 = uv3 - uv1;
+                    let delta_u2 = delta_uv2.x;
+                    let delta_v2 = delta_uv2.y;
+
+                    let f = 1.0 / (delta_u1 * delta_v2 - delta_u2 * delta_v1);
+                    Vec3::new(
+                        f * (delta_v2 * edge1.x - delta_v1 * edge2.x),
+                        f * (delta_v2 * edge1.y - delta_v1 * edge2.y),
+                        f * (delta_v2 * edge1.z - delta_v1 * edge2.z),
+                    )
+                    .normalize()
+                    // 注：B = cross(T, N) 留到顶点着色器中计算，省一个 varyings
+                }
+                // 未启用 TBN 时用占位值，保持 varyings 数量一致
+                false => Vec3::ZERO,
+            };
+
             for idx in face {
                 let pos = model.verts()[idx[0] as usize];
                 let normal = model.vert_normals()[idx[2] as usize];
@@ -35,6 +74,7 @@ pub fn load_model(path: &str) -> Option<Vec<VertexInput>> {
                         Varying::Color(WHITE),
                         Varying::Vec3(normal),
                         Varying::Vec2(texcoord),
+                        Varying::Vec3(t_vec), // varyings[3]: 切线 T (TBN)
                     ],
                 });
             }

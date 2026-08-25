@@ -1,6 +1,6 @@
 //! african_head 模型强相关代码：资产加载（模型 + 贴图）与离屏渲染测试。
 
-use glam::Vec3;
+use glam::{Mat3, Vec3};
 
 use crate::drawline::TGAImageType::RGB;
 use crate::drawline::TGAImage;
@@ -30,9 +30,9 @@ pub struct AfricanHeadAssets {
 pub fn load_african_head_assets() -> AfricanHeadAssets {
     // ---- 模型 ----
     let models: Vec<Vec<VertexInput>> = vec![
-        load_model("assert/african_head/african_head.obj"),
-        load_model("assert/african_head/african_head_eye_inner.obj"),
-        load_model("assert/african_head/african_head_eye_outer.obj"),
+        load_model("assert/african_head/african_head.obj", true),
+        load_model("assert/african_head/african_head_eye_inner.obj", true),
+        load_model("assert/african_head/african_head_eye_outer.obj", true),
     ]
     .into_iter()
     .flatten()
@@ -41,7 +41,7 @@ pub fn load_african_head_assets() -> AfricanHeadAssets {
     // ---- 头部贴图 ----
     let mut head_normal_texture = TGAImage::new(1024, 1024, RGB);
     head_normal_texture
-        .read_tga_file("assert/african_head/african_head_nm.tga")
+        .read_tga_file("assert/african_head/african_head_nm_tangent.tga")
         .unwrap();
     head_normal_texture.flip_vertically();
 
@@ -54,7 +54,7 @@ pub fn load_african_head_assets() -> AfricanHeadAssets {
     // ---- 眼睛贴图 ----
     let mut eye_inner_normal_texture = TGAImage::new(256, 256, RGB);
     eye_inner_normal_texture
-        .read_tga_file("assert/african_head/african_head_eye_inner_nm.tga")
+        .read_tga_file("assert/african_head/african_head_eye_inner_nm_tangent.tga")
         .unwrap();
     eye_inner_normal_texture.flip_vertically();
 
@@ -66,7 +66,7 @@ pub fn load_african_head_assets() -> AfricanHeadAssets {
 
     let mut eye_outer_normal_texture = TGAImage::new(256, 256, RGB);
     eye_outer_normal_texture
-        .read_tga_file("assert/african_head/african_head_eye_outer_nm.tga")
+        .read_tga_file("assert/african_head/african_head_eye_outer_nm_tangent.tga")
         .unwrap();
     eye_outer_normal_texture.flip_vertically();
 
@@ -93,13 +93,35 @@ pub fn vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOutput {
     // 获取局部法线
     let local_normal = match input.varyings[1] {
         Varying::Vec3(n) => n,
-        _ => unreachable!(),
+        _ => unreachable!("second varying must be normal"),
     };
     // 变换到世界空间
-    let world_normal = uniforms.normal_matrix * local_normal;
+    let world_normal = (uniforms.normal_matrix * local_normal).normalize();
+
+    // 获取局部切线 T（load_model 在加载时按面计算并写入 varyings[3]）
+    let local_tangent = match input.varyings[3] {
+        Varying::Vec3(t) => t,
+        _ => unreachable!("fourth varying must be tangent"),
+    };
+    // 变换到世界空间
+    let world_tangent = uniforms.normal_matrix * local_tangent;
+
+    // Gram-Schmidt 正交化：去掉 T 中与 N 平行的分量，保证 TBN 三轴两两正交
+    let t_ortho = world_tangent - world_normal * world_tangent.dot(world_normal);
+    let t = if t_ortho.length_squared() > 1e-6 {
+        t_ortho.normalize()
+    } else {
+        // 退化（T 为 0 或与 N 平行）：任取一个与 N 正交的方向兜底
+        let helper = if world_normal.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+        world_normal.cross(helper).normalize()
+    };
+    // 右手系约定（与 *_nm_tangent.tga 烘焙手性一致，已实测验证）：B = cross(N, T)
+    let b = world_normal.cross(t);
 
     let mut varyings = input.varyings.clone();
     varyings[1] = Varying::Vec3(world_normal);
+    varyings[3] = Varying::Vec3(t); // 世界空间 T
+    varyings.push(Varying::Vec3(b)); // varyings[4]: 世界空间 B
 
     VertexOutput { pos, varyings }
 }
@@ -120,7 +142,19 @@ pub fn fragment_shader(uniforms: &Uniforms, frag: &FragmentInput) -> TGAColor {
         _ => unreachable!("third varying must be texcoord"),
     };
 
-    // 采样法线贴图：颜色通道 [0,1] 需解码为方向 [-1,1]（object-space 法线贴图）
+    // 插值得到的世界空间 T、B（顶点着色器中已做 Gram-Schmidt 正交化）
+    let t = match frag.varyings[3] {
+        Varying::Vec3(t) => t.normalize(),
+        _ => unreachable!("fourth varying must be tangent"),
+    };
+    let b = match frag.varyings[4] {
+        Varying::Vec3(b) => b.normalize(),
+        _ => unreachable!("fifth varying must be bitangent"),
+    };
+    // TBN 矩阵：列 [T | B | N]，将切线空间方向变换到世界空间
+    let tbn = Mat3::from_cols(t, b, vertex_normal);
+
+    // 采样切线空间法线贴图：颜色 [0,1] 解码为方向 [-1,1]
     let normal = match uniforms.normal_tex {
         Some(normal_image) => {
             let x = ((texcoord.x.clamp(0.0, 1.0) * normal_image.width() as f32) as usize)
@@ -129,7 +163,9 @@ pub fn fragment_shader(uniforms: &Uniforms, frag: &FragmentInput) -> TGAColor {
                 .min(normal_image.height() - 1);
 
             if let Some(normal_color) = normal_image.get(x, y) {
-                (normal_color.to_RGB() * 2.0 - Vec3::splat(1.0)).normalize()
+                let n_tangent = (normal_color.to_RGB() * 2.0 - Vec3::splat(1.0)).normalize();
+                // 切线空间 → 世界空间
+                (tbn * n_tangent).normalize()
             } else {
                 vertex_normal
             }
@@ -181,11 +217,11 @@ mod tests {
     /// 离屏渲染真实模型：修复高光后，画面应出现明显亮于漫反射上限的像素
     #[test]
     fn render_african_head_has_specular_highlight() {
-        let verts = load_model("assert/african_head/african_head.obj").unwrap();
+        let verts = load_model("assert/african_head/african_head.obj", true).unwrap();
 
         let mut normal_texture = TGAImage::new(1024, 1024, RGB);
         normal_texture
-            .read_tga_file("assert/african_head/african_head_nm.tga")
+            .read_tga_file("assert/african_head/african_head_nm_tangent.tga")
             .unwrap();
         normal_texture.flip_vertically();
 
