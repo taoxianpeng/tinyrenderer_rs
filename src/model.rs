@@ -146,15 +146,20 @@ impl Model {
             let verts = line
                 .strip_prefix(prefix)
                 .ok_or(format!("missing '{prefix}' prefix"))?
-                .trim()
-                .splitn(3, ' ')
+                .split_whitespace()
+                .take(3) // 部分 OBJ 的 v 行带多余分量（如 v x y z r g b），只取前 3 个坐标
                 .map(|s| s.parse::<f32>().map_err(|e| format!("parse error: {e}")))
                 .collect::<Result<Vec<_>, _>>()?;
+
+            if verts.len() < 2 || verts.len() > 3 {
+                return Err(format!("expected 2 or 3 components, got {}", verts.len()));
+            }
 
             return Ok(Vec3 {
                 x: verts[0],
                 y: verts[1],
-                z: verts[2],
+                // vt 行可能只有 2 个分量（u, v），z 补 0
+                z: *verts.get(2).unwrap_or(&0.0),
             });
         }
 

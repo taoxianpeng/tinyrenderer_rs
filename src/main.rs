@@ -1,4 +1,6 @@
 mod african_head;
+mod boggie;
+mod diablo3_pose;
 mod drawline;
 mod drawtriangle;
 mod model;
@@ -23,8 +25,10 @@ fn main() {
 }
 
 fn run() {
-    // 一次性加载 african_head 的全部资产（模型 + 贴图）
-    let assets = african_head::load_african_head_assets();
+    // 一次性加载三个场景的全部资产（模型 + 贴图）
+    let head_assets = african_head::load_african_head_assets();
+    let boggie_assets = boggie::load_boggie_assets();
+    let diablo_assets = diablo3_pose::load_diablo3_pose_assets();
 
     let width = 800;
     let height = 800;
@@ -41,9 +45,12 @@ fn run() {
     pipeline.set_cull_mode(renderpipeline::CullMode::BACK);
     pipeline.set_draw_mode(renderpipeline::PolygonMode::FILL);
 
-    pipeline.set_vertex_shader(african_head::vertex_shader);
-    pipeline.set_fragment_shader(african_head::fragment_shader);
+    // 三个模型沿 x 轴错开摆放（包围盒宽 ≤1.62，间距 2.2 互不重叠）
+    let head_offset = Vec3::new(-2.2, 0.0, 0.0);
+    let boggie_offset = Vec3::ZERO;
+    let diablo_offset = Vec3::new(2.2, 0.0, 0.0);
 
+    // 视野加宽 + 相机拉远 + 远裁剪面放宽，保证三者都在视锥内
     let proj_mat = projection(
         renderpipeline::ProjectionMode::PERSPECTIVE,
         std::f32::consts::FRAC_PI_4,
@@ -52,7 +59,7 @@ fn run() {
             y: height as f32,
         },
         0.1,
-        10.0,
+        50.0,
     );
 
     // 打开 minifb 窗口（不限帧率）
@@ -63,10 +70,9 @@ fn run() {
     // 相机状态：球面坐标
     let mut yaw = 0.0f32;
     let mut pitch = 0.0f32;
-    let radius = 2.5f32;
+    let radius = 5.5f32;
     let center = Vec3::ZERO;
     let up = Vec3::Y;
-    let model_mat = Mat4::IDENTITY;
     const ROTATE_SPEED: f32 = 0.05;
     let light_dir = Vec3::new(-1.0, 1.0, 1.0).normalize();
 
@@ -97,47 +103,110 @@ fn run() {
         );
 
         let view_mat = lookat(&eye, &center, &up);
-        let model_view = view_mat * model_mat;
-        let model_view_proj = proj_mat * model_view;
-        let normal_matrix = Mat3::from_mat4(model_mat.inverse().transpose());
 
-        // view_dir: 从表面指向相机的方向 → 用于 Blinn-Phong 半向量
+        // view_dir: 从场景中心指向相机的方向 → 用于 Blinn-Phong 半向量
         let view_dir = (eye - center).normalize();
-
-        let mut uniforms = Uniforms {
-            model: model_mat,
-            view: view_mat,
-            projection: proj_mat,
-            model_view,
-            model_view_proj,
-            normal_matrix,
-            light_dir,
-            view_dir,
-            ambient_color: Vec3::new(0.5, 0.5, 0.5),
-            diffuse_color: Vec3::new(0.7, 0.7, 0.7),
-            specular_color: Vec3::new(0.3, 0.3, 0.3),
-            diffuse_tex: Some(&assets.head_diffuse_texture),
-            normal_tex: Some(&assets.head_normal_texture),
-            specular_tex: None,
-            glossiness_tex: None,
-        };
 
         // ----- 渲染（复用 pipeline，不复分配）-----
         pipeline.clear_buffer(&bg_color);
         pipeline.begin_frame();
 
-        // draw head
-        pipeline.draw(&assets.models[0], &uniforms);
+        // ===== 1. african_head =====
+        pipeline.set_vertex_shader(african_head::vertex_shader);
+        pipeline.set_fragment_shader(african_head::fragment_shader);
+        let model_mat = Mat4::from_translation(head_offset);
+        let mut uniforms = Uniforms {
+            model: model_mat,
+            view: view_mat,
+            projection: proj_mat,
+            model_view: view_mat * model_mat,
+            model_view_proj: proj_mat * view_mat * model_mat,
+            normal_matrix: Mat3::from_mat4(model_mat.inverse().transpose()),
+            light_dir,
+            view_dir,
+            ambient_color: Vec3::new(0.5, 0.5, 0.5),
+            diffuse_color: Vec3::new(0.7, 0.7, 0.7),
+            specular_color: Vec3::new(0.3, 0.3, 0.3),
+            diffuse_tex: Some(&head_assets.head_diffuse_texture),
+            normal_tex: Some(&head_assets.head_normal_texture),
+            specular_tex: Some(&head_assets.head_spec_texture),
+            glossiness_tex: None,
+        };
 
-        // draw inner eye（虹膜，不透明，先画）
-        uniforms.normal_tex = Some(&assets.eye_inner_normal_texture);
-        uniforms.diffuse_tex = Some(&assets.eye_inner_diffuse_texture);
-        pipeline.draw(&assets.models[1], &uniforms);
+        // draw head
+        pipeline.draw(&head_assets.models[0], &uniforms);
+
+        // draw inner eye（虹膜，不透明，先画）：眼睛没有独立贴图，关闭法线/高光贴图
+        uniforms.normal_tex = Some(&head_assets.eye_inner_normal_texture);
+        uniforms.diffuse_tex = Some(&head_assets.eye_inner_diffuse_texture);
+        uniforms.specular_tex = None;
+        pipeline.draw(&head_assets.models[1], &uniforms);
 
         // draw outer eye（角膜，diffuse 贴图带 alpha，半透明，后画以混合出虹膜颜色）
-        uniforms.normal_tex = Some(&assets.eye_outer_normal_texture);
-        uniforms.diffuse_tex = Some(&assets.eye_outer_diffuse_texture);
-        pipeline.draw(&assets.models[2], &uniforms);
+        uniforms.normal_tex = Some(&head_assets.eye_outer_normal_texture);
+        uniforms.diffuse_tex = Some(&head_assets.eye_outer_diffuse_texture);
+        pipeline.draw(&head_assets.models[2], &uniforms);
+
+        // ===== 2. boggie（body / head / eyes 共用同一模型矩阵，部件坐标自带偏移）=====
+        pipeline.set_vertex_shader(boggie::vertex_shader);
+        pipeline.set_fragment_shader(boggie::fragment_shader);
+        let model_mat = Mat4::from_translation(boggie_offset);
+        let mut uniforms = Uniforms {
+            model: model_mat,
+            view: view_mat,
+            projection: proj_mat,
+            model_view: view_mat * model_mat,
+            model_view_proj: proj_mat * view_mat * model_mat,
+            normal_matrix: Mat3::from_mat4(model_mat.inverse().transpose()),
+            light_dir,
+            view_dir,
+            ambient_color: Vec3::new(0.5, 0.5, 0.5),
+            diffuse_color: Vec3::new(0.7, 0.7, 0.7),
+            specular_color: Vec3::new(0.3, 0.3, 0.3),
+            diffuse_tex: Some(&boggie_assets.body_diffuse_texture),
+            normal_tex: Some(&boggie_assets.body_normal_texture),
+            specular_tex: Some(&boggie_assets.body_spec_texture),
+            glossiness_tex: None,
+        };
+
+        // draw body
+        pipeline.draw(&boggie_assets.models[0], &uniforms);
+
+        // draw head
+        uniforms.diffuse_tex = Some(&boggie_assets.head_diffuse_texture);
+        uniforms.normal_tex = Some(&boggie_assets.head_normal_texture);
+        uniforms.specular_tex = Some(&boggie_assets.head_spec_texture);
+        pipeline.draw(&boggie_assets.models[1], &uniforms);
+
+        // draw eyes
+        uniforms.diffuse_tex = Some(&boggie_assets.eyes_diffuse_texture);
+        uniforms.normal_tex = Some(&boggie_assets.eyes_normal_texture);
+        uniforms.specular_tex = Some(&boggie_assets.eyes_spec_texture);
+        pipeline.draw(&boggie_assets.models[2], &uniforms);
+
+        // ===== 3. diablo3_pose（glow 贴图借 glossiness_tex 通道作为自发光项）=====
+        pipeline.set_vertex_shader(diablo3_pose::vertex_shader);
+        pipeline.set_fragment_shader(diablo3_pose::fragment_shader);
+        let model_mat = Mat4::from_translation(diablo_offset);
+        let uniforms = Uniforms {
+            model: model_mat,
+            view: view_mat,
+            projection: proj_mat,
+            model_view: view_mat * model_mat,
+            model_view_proj: proj_mat * view_mat * model_mat,
+            normal_matrix: Mat3::from_mat4(model_mat.inverse().transpose()),
+            light_dir,
+            view_dir,
+            ambient_color: Vec3::new(0.5, 0.5, 0.5),
+            diffuse_color: Vec3::new(0.7, 0.7, 0.7),
+            specular_color: Vec3::new(0.3, 0.3, 0.3),
+            diffuse_tex: Some(&diablo_assets.diffuse_texture),
+            normal_tex: Some(&diablo_assets.normal_texture),
+            specular_tex: Some(&diablo_assets.spec_texture),
+            glossiness_tex: Some(&diablo_assets.glow_texture),
+        };
+
+        pipeline.draw(&diablo_assets.models[0], &uniforms);
 
         // ----- 显示 -----
         window

@@ -6,12 +6,14 @@ use glam::{IVec2, Mat3, Mat4, Vec2, Vec3, Vec4, vec4};
 use std::cmp::{max, min};
 use std::vec;
 
+#[derive(Clone, Copy)]
 pub enum PolygonMode {
     FILL,
     LINE,
     Point,
 }
 
+#[derive(Clone, Copy)]
 pub enum CullMode {
     BACK,
     FRONT,
@@ -106,7 +108,7 @@ fn is_in_edge(p: &IVec2, v_start: &IVec2, v_end: &IVec2) -> bool {
 }
 
 pub type VertexShader = fn(&Uniforms<'_>, &VertexInput) -> VertexOutput;
-pub type FragmentShader = fn(&Uniforms<'_>, &FragmentInput) -> TGAColor;
+pub type FragmentShader = fn(&Uniforms<'_>, &FragmentInput, &Vec<f32>) -> TGAColor;
 
 pub fn default_vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOutput {
     let pos = uniforms.model_view_proj * input.pos.extend(1.0);
@@ -125,7 +127,7 @@ pub fn default_vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> Vertex
     VertexOutput { pos, varyings }
 }
 
-pub fn default_fragment_shader(uniforms: &Uniforms, frag: &FragmentInput) -> TGAColor {
+pub fn default_fragment_shader(uniforms: &Uniforms, frag: &FragmentInput, depth: &Vec<f32>) -> TGAColor {
     // let color = match frag.varyings[0] {
     //     Varying::Color(color) => color,
     //     _ => unreachable!("first varying must be color"),
@@ -194,12 +196,12 @@ pub struct RenderPipleline<'a> {
     polygon_mode: PolygonMode,
     flat_normal: bool,
     cull: CullMode,
+    only_depth_output: bool,
     framebuffer: &'a mut dyn FrameBufferTarget,
     w: usize,
     h: usize,
     depth_buffer: Vec<f32>,
     color_buffer: Vec<TGAColor>,
-    // 可注入的着色器回调（默认使用内置 Blinn-Phong 实现）
     vertex_shader: VertexShader,
     fragment_shader: FragmentShader,
 }
@@ -216,6 +218,7 @@ impl<'a> RenderPipleline<'a> {
             framebuffer,
             w,
             h,
+            only_depth_output: false,
             depth_buffer: vec![f32::MAX; total_pixels],
             color_buffer: vec![TGAColor::new(0.0, 0.0, 0.0, 0.0); total_pixels],
             vertex_shader: default_vertex_shader,
@@ -233,12 +236,32 @@ impl<'a> RenderPipleline<'a> {
         self.polygon_mode = mode;
     }
 
+    pub fn get_draw_mode(&self) -> PolygonMode{
+        self.polygon_mode
+    }
+
     pub fn set_flat_normal(&mut self, enable: bool) {
         self.flat_normal = enable;
     }
 
+    pub fn get_flat_normal(&self) -> bool{
+        self.flat_normal
+    }
+
     pub fn set_cull_mode(&mut self, mode: CullMode) {
         self.cull = mode;
+    }
+
+    pub fn get_cull_mode(&self) -> CullMode {
+        self.cull
+    }
+
+    pub fn set_only_depth_output(&mut self, enable: bool) {
+        self.only_depth_output = enable;
+    }
+
+    pub fn get_only_depth_output(&self) -> bool {
+        self.only_depth_output
     }
 
     /// 注入自定义顶点着色器（默认使用内置 Blinn-Phong 顶点着色器）
@@ -308,7 +331,7 @@ impl<'a> RenderPipleline<'a> {
 
         if let Some(filtered_frags) = self.depth_test(fragment_inputs) {
             for frag in filtered_frags {
-                let color = (self.fragment_shader)(uniforms, &frag);
+                let color = (self.fragment_shader)(uniforms, &frag, &self.depth_buffer);
                 self.raster_operations(frag.pos.x as usize, frag.pos.y as usize, color);
             }
         }
