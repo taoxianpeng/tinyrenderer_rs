@@ -2,6 +2,7 @@ mod african_head;
 mod boggie;
 mod diablo3_pose;
 mod drawline;
+mod floor;
 mod drawtriangle;
 mod model;
 mod renderpipeline;
@@ -25,10 +26,10 @@ fn main() {
 }
 
 fn run() {
-    // 一次性加载三个场景的全部资产（模型 + 贴图）
     let head_assets = african_head::load_african_head_assets();
     let boggie_assets = boggie::load_boggie_assets();
     let diablo_assets = diablo3_pose::load_diablo3_pose_assets();
+    let floor_assets = floor::load_floor_assets();
 
     let width = 800;
     let height = 800;
@@ -110,6 +111,31 @@ fn run() {
         // ----- 渲染（复用 pipeline，不复分配）-----
         pipeline.clear_buffer(&bg_color);
         pipeline.begin_frame();
+
+        pipeline.set_vertex_shader(floor::vertex_shader);
+        pipeline.set_fragment_shader(floor::fragment_shader);
+        // floor.obj 两个三角形的绕序与本工程背面剔除约定相反，画地面时关闭剔除
+        pipeline.set_cull_mode(renderpipeline::CullMode::NULL);
+        let model_mat = Mat4::from_scale(Vec3::new(2.5, 1.0, 2.5));
+        let floor_uniforms = Uniforms {
+            model: model_mat,
+            view: view_mat,
+            projection: proj_mat,
+            model_view: view_mat * model_mat,
+            model_view_proj: proj_mat * view_mat * model_mat,
+            normal_matrix: Mat3::from_mat4(model_mat.inverse().transpose()),
+            light_dir,
+            view_dir,
+            ambient_color: Vec3::new(0.5, 0.5, 0.5),
+            diffuse_color: Vec3::new(0.7, 0.7, 0.7),
+            specular_color: Vec3::new(0.3, 0.3, 0.3),
+            diffuse_tex: Some(&floor_assets.diffuse_texture),
+            normal_tex: Some(&floor_assets.normal_texture),
+            specular_tex: Some(&floor_assets.spec_texture),
+            glossiness_tex: None,
+        };
+        pipeline.draw(&floor_assets.models[0], &floor_uniforms);
+        pipeline.set_cull_mode(renderpipeline::CullMode::BACK);
 
         // ===== 1. african_head =====
         pipeline.set_vertex_shader(african_head::vertex_shader);
