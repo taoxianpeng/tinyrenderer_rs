@@ -112,6 +112,19 @@ pub type FragmentShader = fn(&Uniforms<'_>, &FragmentInput, &Vec<f32>) -> TGACol
 
 pub fn default_vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOutput {
     let pos = uniforms.model_view_proj * input.pos.extend(1.0);
+    VertexOutput { pos, varyings: None }
+}
+
+pub fn default_fragment_shader(
+    uniforms: &Uniforms,
+    frag: &FragmentInput,
+    depth: &Vec<f32>,
+) -> TGAColor {
+    TGAColor::new(1.0, 0.0, 0.0, 1.0)
+}
+
+pub fn phong_vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOutput {
+    let pos = uniforms.model_view_proj * input.pos.extend(1.0);
 
     // 获取局部法线
     let local_normal = match input.varyings[1] {
@@ -124,10 +137,14 @@ pub fn default_vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> Vertex
     let mut varyings = input.varyings.clone();
     varyings[1] = Varying::Vec3(world_normal);
 
-    VertexOutput { pos, varyings }
+    VertexOutput { pos, varyings: Some(varyings) }
 }
 
-pub fn default_fragment_shader(uniforms: &Uniforms, frag: &FragmentInput, depth: &Vec<f32>) -> TGAColor {
+pub fn phong_fragment_shader(
+    uniforms: &Uniforms,
+    frag: &FragmentInput,
+    depth: &Vec<f32>,
+) -> TGAColor {
     // let color = match frag.varyings[0] {
     //     Varying::Color(color) => color,
     //     _ => unreachable!("first varying must be color"),
@@ -189,7 +206,6 @@ pub fn default_fragment_shader(uniforms: &Uniforms, frag: &FragmentInput, depth:
     let color_t = ambient + diffuse + specular;
 
     TGAColor::new(color_t.x, color_t.y, color_t.z, diffuse_alpha)
-
 }
 
 pub struct RenderPipleline<'a> {
@@ -221,8 +237,8 @@ impl<'a> RenderPipleline<'a> {
             only_depth_output: false,
             depth_buffer: vec![f32::MAX; total_pixels],
             color_buffer: vec![TGAColor::new(0.0, 0.0, 0.0, 0.0); total_pixels],
-            vertex_shader: default_vertex_shader,
-            fragment_shader: default_fragment_shader,
+            vertex_shader: phong_vertex_shader,
+            fragment_shader: phong_fragment_shader,
         }
     }
 
@@ -232,11 +248,15 @@ impl<'a> RenderPipleline<'a> {
         self.color_buffer.fill(TGAColor::new(0.0, 0.0, 0.0, 0.0));
     }
 
+    pub fn get_depth_buffer(&self) -> &Vec<f32>{
+        &self.depth_buffer
+    }
+
     pub fn set_draw_mode(&mut self, mode: PolygonMode) {
         self.polygon_mode = mode;
     }
 
-    pub fn get_draw_mode(&self) -> PolygonMode{
+    pub fn get_draw_mode(&self) -> PolygonMode {
         self.polygon_mode
     }
 
@@ -244,7 +264,7 @@ impl<'a> RenderPipleline<'a> {
         self.flat_normal = enable;
     }
 
-    pub fn get_flat_normal(&self) -> bool{
+    pub fn get_flat_normal(&self) -> bool {
         self.flat_normal
     }
 
@@ -303,20 +323,30 @@ impl<'a> RenderPipleline<'a> {
         // flat normal: 如果开启，将每个三角形三个顶点的法线统一为平均值
         if self.flat_normal {
             for tri in primitive_array.iter_mut() {
+                // 任一顶点不携带 varyings（None）时跳过 flat normal 处理
                 let avg = match (
-                    &tri[0].varyings[1],
-                    &tri[1].varyings[1],
-                    &tri[2].varyings[1],
+                    tri[0].varyings.as_ref(),
+                    tri[1].varyings.as_ref(),
+                    tri[2].varyings.as_ref(),
                 ) {
-                    (Varying::Vec3(a), Varying::Vec3(b), Varying::Vec3(c)) => {
-                        (*a + *b + *c).normalize()
-                    }
-                    _ => unreachable!("second varying must be normal"),
+                    (Some(v0), Some(v1), Some(v2)) => match (&v0[1], &v1[1], &v2[1]) {
+                        (Varying::Vec3(a), Varying::Vec3(b), Varying::Vec3(c)) => {
+                            (*a + *b + *c).normalize()
+                        }
+                        _ => unreachable!("second varying must be normal"),
+                    },
+                    _ => continue,
                 };
                 let flat = Varying::Vec3(avg);
-                tri[0].varyings[1] = flat;
-                tri[1].varyings[1] = flat;
-                tri[2].varyings[1] = flat;
+                if let Some(v) = tri[0].varyings.as_mut() {
+                    v[1] = flat;
+                }
+                if let Some(v) = tri[1].varyings.as_mut() {
+                    v[1] = flat;
+                }
+                if let Some(v) = tri[2].varyings.as_mut() {
+                    v[1] = flat;
+                }
             }
         }
 
@@ -330,14 +360,14 @@ impl<'a> RenderPipleline<'a> {
         }
 
         if let Some(filtered_frags) = self.depth_test(fragment_inputs) {
-            for frag in filtered_frags {
-                let color = (self.fragment_shader)(uniforms, &frag, &self.depth_buffer);
-                self.raster_operations(frag.pos.x as usize, frag.pos.y as usize, color);
+            if !self.only_depth_output {
+                for frag in filtered_frags {
+                    let color = (self.fragment_shader)(uniforms, &frag, &self.depth_buffer);
+                    self.raster_operations(frag.pos.x as usize, frag.pos.y as usize, color);
+                }
             }
         }
     }
-
-
 
     fn primitive_assembly(&self, input: Vec<[VertexOutput; 3]>) -> Vec<PrimitiveOutput> {
         let mut out: Vec<PrimitiveOutput> = Vec::new();
@@ -355,8 +385,10 @@ impl<'a> RenderPipleline<'a> {
 
         // clip-space → NDC（透视除法）→ 屏幕空间
         let to_screen = |pos: &Vec4| -> Option<IVec2> {
-            if pos.w.abs() < 1e-8 {
-                return None; // 剔除 w 接近 0 的退化三角形
+            // w <= 0：顶点位于相机后方，透视除法会翻转坐标（本管线未实现近平面
+            // 多边形裁剪，故作兜底：任一顶点无效则整个图元被丢弃）
+            if pos.w <= 1e-8 {
+                return None;
             }
             let ndc = pos.truncate() / pos.w; // 透视除法 → NDC [-1,1]
             Some(IVec2::new(
@@ -377,9 +409,11 @@ impl<'a> RenderPipleline<'a> {
         let d1 = input.triangle[1].pos.z;
         let d2 = input.triangle[2].pos.z;
 
-        let varyings0 = &input.triangle[0].varyings;
-        let varyings1 = &input.triangle[1].varyings;
-        let varyings2 = &input.triangle[2].varyings;
+        // varyings 为 None 时按空切片处理，插值结果为空（纯深度 pass）
+        let empty: [Varying; 0] = [];
+        let varyings0 = input.triangle[0].varyings.as_deref().unwrap_or(&empty);
+        let varyings1 = input.triangle[1].varyings.as_deref().unwrap_or(&empty);
+        let varyings2 = input.triangle[2].varyings.as_deref().unwrap_or(&empty);
 
         if let (Some(p0), Some(p1), Some(p2)) = (p0, p1, p2) {
             match self.polygon_mode {
@@ -426,15 +460,25 @@ impl<'a> RenderPipleline<'a> {
                                 let inv_w1 = 1.0 / w1_clip;
                                 let inv_w2 = 1.0 / w2_clip;
 
+                                // 经过透视矫正后的三角形面积
                                 let denom = w0 * inv_w0 + w1 * inv_w1 + w2 * inv_w2;
+                                // 透视矫正过后该像素点在三角形中的分配比重
                                 let r1 = (w0 * inv_w0) / denom;
                                 let r2 = (w1 * inv_w1) / denom;
                                 let r3 = (w2 * inv_w2) / denom;
 
                                 let depth = r1 * d0 + r2 * d1 + r3 * d2;
 
+                                // 近/远平面裁剪：depth 是透视校正的 clip-space z，
+                                // 乘回 denom（= 1/w(p) 的屏幕线性插值）还原为 NDC 深度，
+                                // 超出 [-1,1] 的片元位于近/远平面之外，直接丢弃
+                                let ndc_depth = depth * denom;
+                                if !(-1.0..=1.0).contains(&ndc_depth) {
+                                    continue;
+                                }
+
                                 let interpolated_varyings = interpolate_varyings(
-                                    &varyings0, &varyings1, &varyings2, r1, r2, r3,
+                                    varyings0, varyings1, varyings2, r1, r2, r3,
                                 );
 
                                 let frag = FragmentInput {
@@ -496,21 +540,16 @@ impl<'a> RenderPipleline<'a> {
         // mix color
         let src_color = self.framebuffer.get(x, y);
         let dst_color = match src_color {
-            Some(s_color) => {
-                TGAColor::new(
-                    color.a * color.r + (1.0 - color.a) * s_color.r,
-                    color.a * color.g + (1.0 - color.a) * s_color.g,
-                    color.a * color.b + (1.0 - color.a) * s_color.b,
-                    1.0
-                )
-            }
-            None => {
-                TGAColor::new(color.r, color.g, color.b, 1.0)
-            }
+            Some(s_color) => TGAColor::new(
+                color.a * color.r + (1.0 - color.a) * s_color.r,
+                color.a * color.g + (1.0 - color.a) * s_color.g,
+                color.a * color.b + (1.0 - color.a) * s_color.b,
+                1.0,
+            ),
+            None => TGAColor::new(color.r, color.g, color.b, 1.0),
         };
         self.framebuffer.set(x, y, &dst_color);
     }
-
 }
 
 // 输入: 一个顶点的原始属性
@@ -609,7 +648,8 @@ mod tests {
 #[derive(Clone, Debug)]
 pub struct VertexOutput {
     pub pos: Vec4,
-    pub varyings: Vec<Varying>,
+    /// None 表示不携带 varying（如纯深度 pass）；Some 为逐顶点属性列表
+    pub varyings: Option<Vec<Varying>>,
 }
 
 #[derive(Clone, Copy, Debug)]

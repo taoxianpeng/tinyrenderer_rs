@@ -74,6 +74,13 @@ impl From<io::Error> for TgaError {
     }
 }
 
+pub fn f32_to_tga(data: &Vec<u8>, w: usize, h: usize) -> TGAImage{
+    if data.len() != (w*h) {
+        unreachable!("data size != w*h");
+    }
+    TGAImage { data: data.clone(), w, h, bpp: 1 }
+}
+
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default)]
 struct TgaHeader {

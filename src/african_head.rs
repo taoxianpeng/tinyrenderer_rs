@@ -132,7 +132,7 @@ pub fn vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOutput {
     varyings[3] = Varying::Vec3(t); // 世界空间 T
     varyings.push(Varying::Vec3(b)); // varyings[4]: 世界空间 B
 
-    VertexOutput { pos, varyings }
+    VertexOutput { pos, varyings: Some(varyings) }
 }
 
 pub fn fragment_shader(uniforms: &Uniforms, frag: &FragmentInput, _depth: &Vec<f32>) -> TGAColor {

@@ -153,7 +153,7 @@ pub fn vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOutput {
     varyings[3] = Varying::Vec3(t); // 世界空间 T
     varyings.push(Varying::Vec3(b)); // varyings[4]: 世界空间 B
 
-    VertexOutput { pos, varyings }
+    VertexOutput { pos, varyings: Some(varyings) }
 }
 
 /// 采样一张贴图的 (颜色, alpha)；采样器逻辑与 african_head 一致
