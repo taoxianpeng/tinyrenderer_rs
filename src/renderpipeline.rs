@@ -4,6 +4,7 @@ use crate::renderpipeline::{ProjectionMode::ORTHO, ProjectionMode::PERSPECTIVE};
 use crate::tgaimage::TGAImage;
 use glam::{IVec2, Mat3, Mat4, Vec2, Vec3, Vec4, vec4};
 use std::cmp::{max, min};
+use std::ops::{Index, IndexMut};
 use std::vec;
 
 #[derive(Clone, Copy)]
@@ -54,17 +55,17 @@ pub fn projection(
 ) -> Mat4 {
     match mode {
         ORTHO => {
-            return Mat4::from_cols(
+            Mat4::from_cols(
                 vec4(2.0 / view_size.x, 0.0, 0.0, 0.0),
                 vec4(0.0, 2.0 / view_size.y, 0.0, 0.0),
+                vec4(0.0, 0.0, -2.0 / (z_far - z_near), 0.0),
                 vec4(
                     0.0,
                     0.0,
-                    2.0 / (z_far - z_near),
                     -(z_far + z_near) / (z_far - z_near),
+                    1.0,
                 ),
-                vec4(0.0, 0.0, 0.0, 1.0),
-            );
+            )
         }
         PERSPECTIVE => {
             let aspect_ratio = view_size.x / view_size.y;
@@ -112,7 +113,10 @@ pub type FragmentShader = fn(&Uniforms<'_>, &FragmentInput, &Vec<f32>) -> TGACol
 
 pub fn default_vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOutput {
     let pos = uniforms.model_view_proj * input.pos.extend(1.0);
-    VertexOutput { pos, varyings: None }
+    VertexOutput {
+        pos,
+        varyings: None,
+    }
 }
 
 pub fn default_fragment_shader(
@@ -127,7 +131,7 @@ pub fn phong_vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOu
     let pos = uniforms.model_view_proj * input.pos.extend(1.0);
 
     // 获取局部法线
-    let local_normal = match input.varyings[1] {
+    let local_normal = match input.varyings[VaryingIndex::Normal] {
         Varying::Vec3(n) => n,
         _ => unreachable!(),
     };
@@ -135,9 +139,12 @@ pub fn phong_vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOu
     let world_normal = uniforms.normal_matrix * local_normal;
 
     let mut varyings = input.varyings.clone();
-    varyings[1] = Varying::Vec3(world_normal);
+    varyings[VaryingIndex::Normal] = Varying::Vec3(world_normal);
 
-    VertexOutput { pos, varyings: Some(varyings) }
+    VertexOutput {
+        pos,
+        varyings: Some(varyings),
+    }
 }
 
 pub fn phong_fragment_shader(
@@ -150,12 +157,12 @@ pub fn phong_fragment_shader(
     //     _ => unreachable!("first varying must be color"),
     // };
     // 插值得到的顶点法线（无 normal map 时的光照法线）
-    let vertex_normal = match frag.varyings[1] {
+    let vertex_normal = match frag.varyings[VaryingIndex::Normal] {
         Varying::Vec3(normal) => normal.normalize(),
         _ => unreachable!("second varying must be normal"),
     };
 
-    let texcoord = match frag.varyings[2] {
+    let texcoord = match frag.varyings[VaryingIndex::TexCoord] {
         Varying::Vec2(texcoord) => texcoord,
         _ => unreachable!("third varying must be texcoord"),
     };
@@ -208,6 +215,73 @@ pub fn phong_fragment_shader(
     TGAColor::new(color_t.x, color_t.y, color_t.z, diffuse_alpha)
 }
 
+pub fn to_screen(pos: &Vec4, width: usize, height: usize) -> Option<IVec2> {
+    // w <= 0：顶点位于相机后方，透视除法会翻转坐标（本管线未实现近平面
+    // 多边形裁剪，故作兜底：任一顶点无效则整个图元被丢弃）
+    if pos.w <= 1e-8 {
+        return None;
+    }
+    let ndc = pos.truncate() / pos.w; // 透视除法 → NDC [-1,1]
+    Some(IVec2::new(
+        ((ndc.x + 1.0) * 0.5 * width as f32 - 0.5).floor() as i32,
+        ((1.0 - ndc.y) * 0.5 * height as f32 - 0.5).floor() as i32,
+    ))
+}
+
+/// 阴影深度偏差，单位是**光源裁剪空间 z**（与 shadow map 存的同一种量）。
+/// 正交光下 clip z 线性于视距，斜率 = 2/(far-near)，可按此换算成世界长度。
+/// 不加 bias 会因纹素离散 + 插值舍入出现 shadow acne（表面自遮蔽条纹）；
+/// 过大则接触阴影与物体脱开（peter-panning）
+const SHADOW_BIAS_BASE: f32 = 0.002;
+const SHADOW_BIAS_SLOPE: f32 = 0.006;
+
+/// 阴影判定：把片元的光源裁剪坐标投影到 shadow map 的纹素上，
+/// 比较"本片元到光的距离"与"该纹素记录的最近遮挡到光的距离"。
+/// 返回 true = 在阴影中。以下情形一律判**受光**（返回 false）：
+/// 阴影未启用 / 无深度图 / 片元在光背后 / 落在光视锥外 / 该纹素没有任何几何写入
+pub fn in_shadow(uniforms: &Uniforms, light_clip: Vec4, ndotl: f32) -> bool {
+    // 未启用时顶点着色器写入的是 Vec4::ZERO 占位，不可用于查表
+    if uniforms.light_view_proj.is_none() {
+        return false;
+    }
+    let Some(map) = uniforms.depth_tex_raw.as_ref() else {
+        return false;
+    };
+    let (w, h) = (map.width, map.height);
+    if w == 0 || h == 0 || map.data.len() < w * h {
+        return false;
+    }
+    // 正交光下 w 恒为 1；将来换成聚光灯（透视投影）时 w<=0 表示片元在光背后
+    if light_clip.w <= 1e-8 {
+        return false;
+    }
+    let ndc = light_clip.truncate() / light_clip.w;
+    // 必须先判视锥越界：越界值经 to_screen 的 floor 后下标会跨行错映射到相邻行，
+    // 单靠 `idx < len` 兜不住（只能挡住最后一维，挡不住行错位）
+    if !(-1.0..=1.0).contains(&ndc.x)
+        || !(-1.0..=1.0).contains(&ndc.y)
+        || !(-1.0..=1.0).contains(&ndc.z)
+    {
+        return false;
+    }
+    // 与光栅化共用 to_screen，保证查到的是光 pass 会写入的那个纹素；
+    // ndc = -1 的极端情况 floor 会得到 -1，故再 clamp（边缘归到边界纹素）
+    let Some(texel) = to_screen(&light_clip, w, h) else {
+        return false;
+    };
+    let u = texel.x.clamp(0, w as i32 - 1) as usize;
+    let v = texel.y.clamp(0, h as i32 - 1) as usize;
+    let map_z = map.data[v * w + u];
+    // depth buffer 哨兵：没有任何几何写入 → 这条光路上无遮挡 → 受光
+    if map_z >= f32::MAX {
+        return false;
+    }
+    // 斜率缩放：掠射面（ndotl → 0）一个纹素横向跨度内的深度差最大，需要更大容差
+    let bias = SHADOW_BIAS_BASE + SHADOW_BIAS_SLOPE * (1.0 - ndotl);
+    // 同空间比较：两侧都是光源裁剪空间 z
+    light_clip.z > map_z + bias
+}
+
 pub struct RenderPipleline<'a> {
     polygon_mode: PolygonMode,
     flat_normal: bool,
@@ -248,7 +322,7 @@ impl<'a> RenderPipleline<'a> {
         self.color_buffer.fill(TGAColor::new(0.0, 0.0, 0.0, 0.0));
     }
 
-    pub fn get_depth_buffer(&self) -> &Vec<f32>{
+    pub fn get_depth_buffer(&self) -> &Vec<f32> {
         &self.depth_buffer
     }
 
@@ -329,23 +403,29 @@ impl<'a> RenderPipleline<'a> {
                     tri[1].varyings.as_ref(),
                     tri[2].varyings.as_ref(),
                 ) {
-                    (Some(v0), Some(v1), Some(v2)) => match (&v0[1], &v1[1], &v2[1]) {
-                        (Varying::Vec3(a), Varying::Vec3(b), Varying::Vec3(c)) => {
-                            (*a + *b + *c).normalize()
+                    (Some(v0), Some(v1), Some(v2)) => {
+                        match (
+                            &v0[VaryingIndex::Normal],
+                            &v1[VaryingIndex::Normal],
+                            &v2[VaryingIndex::Normal],
+                        ) {
+                            (Varying::Vec3(a), Varying::Vec3(b), Varying::Vec3(c)) => {
+                                (*a + *b + *c).normalize()
+                            }
+                            _ => unreachable!("second varying must be normal"),
                         }
-                        _ => unreachable!("second varying must be normal"),
-                    },
+                    }
                     _ => continue,
                 };
                 let flat = Varying::Vec3(avg);
                 if let Some(v) = tri[0].varyings.as_mut() {
-                    v[1] = flat;
+                    v[VaryingIndex::Normal] = flat;
                 }
                 if let Some(v) = tri[1].varyings.as_mut() {
-                    v[1] = flat;
+                    v[VaryingIndex::Normal] = flat;
                 }
                 if let Some(v) = tri[2].varyings.as_mut() {
-                    v[1] = flat;
+                    v[VaryingIndex::Normal] = flat;
                 }
             }
         }
@@ -378,28 +458,13 @@ impl<'a> RenderPipleline<'a> {
     }
 
     fn rasterization(&mut self, input: &PrimitiveOutput) -> Option<Vec<FragmentInput>> {
-        let w = self.w as f32;
-        let h = self.h as f32;
-
         let mut fragments: Vec<FragmentInput> = Vec::new();
 
         // clip-space → NDC（透视除法）→ 屏幕空间
-        let to_screen = |pos: &Vec4| -> Option<IVec2> {
-            // w <= 0：顶点位于相机后方，透视除法会翻转坐标（本管线未实现近平面
-            // 多边形裁剪，故作兜底：任一顶点无效则整个图元被丢弃）
-            if pos.w <= 1e-8 {
-                return None;
-            }
-            let ndc = pos.truncate() / pos.w; // 透视除法 → NDC [-1,1]
-            Some(IVec2::new(
-                ((ndc.x + 1.0) * 0.5 * w - 0.5).floor() as i32,
-                ((1.0 - ndc.y) * 0.5 * h - 0.5).floor() as i32,
-            ))
-        };
 
-        let p0 = to_screen(&input.triangle[0].pos);
-        let p1 = to_screen(&input.triangle[1].pos);
-        let p2 = to_screen(&input.triangle[2].pos);
+        let p0 = to_screen(&input.triangle[0].pos, self.w, self.h);
+        let p1 = to_screen(&input.triangle[1].pos, self.w, self.h);
+        let p2 = to_screen(&input.triangle[2].pos, self.w, self.h);
 
         let w0_clip = input.triangle[0].pos.w;
         let w1_clip = input.triangle[1].pos.w;
@@ -606,6 +671,7 @@ mod tests {
             normal_matrix: Mat3::IDENTITY,
             light_dir: Vec3::new(0.0, 0.0, 1.0),
             view_dir: Vec3::new(0.0, 0.0, 1.0),
+            light_view_proj: None,
             // ambient 置零：断言不依赖环境光强度常量
             ambient_color: Vec3::ZERO,
             diffuse_color: Vec3::new(0.7, 0.7, 0.7),
@@ -614,6 +680,7 @@ mod tests {
             normal_tex: None,
             specular_tex: None,
             glossiness_tex: None,
+            depth_tex_raw: None,
         }
     }
 
@@ -643,6 +710,39 @@ mod tests {
         );
         assert!(lit.r > unlit.r + 0.1, "高光应让像素明显更亮");
     }
+
+    /// 回归测试：正交投影必须把视空间 [-view_size/2, view_size/2] × [-near, -far] 映射到 NDC
+    #[test]
+    fn ortho_projection_maps_to_unit_ndc() {
+        let m = projection(ORTHO, 0.0, Vec2::new(8.0, 8.0), 0.1, 50.0);
+        let ndc = |v: Vec3| {
+            let o = m * v.extend(1.0);
+            assert!(
+                (o.w - 1.0).abs() < 1e-5,
+                "正交投影 w 应恒为 1（平行投影无透视除法），实际 w = {}",
+                o.w
+            );
+            o.truncate() / o.w
+        };
+        // 视空间看向 -z：近平面 → ndc z = -1，远平面 → +1
+        assert!(
+            (ndc(Vec3::new(0.0, 0.0, -0.1)).z + 1.0).abs() < 1e-4,
+            "近平面 ndc z 应为 -1"
+        );
+        assert!(
+            (ndc(Vec3::new(0.0, 0.0, -50.0)).z - 1.0).abs() < 1e-4,
+            "远平面 ndc z 应为 +1"
+        );
+        // view_size 是正交视野的世界宽高：±4 → ±1
+        assert!(
+            (ndc(Vec3::new(-4.0, 0.0, -1.0)).x + 1.0).abs() < 1e-4,
+            "左边界 ndc x 应为 -1"
+        );
+        assert!(
+            (ndc(Vec3::new(4.0, 4.0, -1.0)).y - 1.0).abs() < 1e-4,
+            "上边界 ndc y 应为 +1"
+        );
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -660,6 +760,44 @@ pub enum Varying {
     Vec4(Vec4),
     Color(TGAColor),
 }
+
+#[derive(Clone, Copy, Debug)]
+pub enum VaryingIndex {
+    Color = 0,
+    Normal = 1,
+    TexCoord = 2,
+    Tangent = 3,
+    // load_model 只产出 [0..3]（见 model.rs：B 故意不进 varyings，省一个插值），
+    // 以下两项都是顶点着色器 push 追加的输出，下标必须紧跟 [3]，不能跳号
+    Bitangent = 4,
+    LightViewPos = 5, // 阴影映射：灯光视角裁剪坐标
+}
+
+impl VaryingIndex {
+    /// varyings 数组的固定长度：槽位由 load_model 一次建满，顶点着色器一律按下标赋值。
+    /// 新增属性只需加枚举项，长度自动跟随——不再靠 push，杜绝跳号/漏 push 越界
+    pub const COUNT: usize = Self::LightViewPos as usize + 1;
+}
+
+// 让 VaryingIndex 直接作为下标使用：varyings[VaryingIndex::Normal]
+// 注意：必须直接为 Vec<Varying> 实现，不能挂在 [Varying] 上——
+// Vec 对非 usize 索引要求实现 SliceIndex，自定义类型走不通
+impl Index<VaryingIndex> for Vec<Varying> {
+    type Output = Varying;
+    #[inline]
+    fn index(&self, i: VaryingIndex) -> &Varying {
+        &self[i as usize]
+    }
+}
+
+impl IndexMut<VaryingIndex> for Vec<Varying> {
+    #[inline]
+    fn index_mut(&mut self, i: VaryingIndex) -> &mut Varying {
+        &mut self[i as usize]
+    }
+}
+
+
 
 impl Varying {
     fn interpolate(a: Varying, b: Varying, c: Varying, r1: f32, r2: f32, r3: f32) -> Varying {
@@ -755,14 +893,28 @@ struct PrimitiveOutput {
     triangle: [VertexOutput; 3],
 }
 
+/// 光源视角深度图（shadow map）。把数据和尺寸放在一起，
+/// 避免着色器里写死分辨率（换 shadow map 尺寸时只需改构造处）
+#[derive(Clone)]
+pub struct ShadowMap {
+    /// 光源裁剪空间深度，与 depth_test 存进 depth_buffer 的是同一种量，可直接比较
+    pub data: Vec<f32>,
+    pub width: usize,
+    pub height: usize,
+}
+
 pub struct Uniforms<'a> {
     // ---- 变换矩阵 ----
-    pub model: Mat4,           // 模型矩阵 (世界变换)
-    pub view: Mat4,            // 视图矩阵 (相机变换)
-    pub projection: Mat4,      // 投影矩阵 (透视/正交)
-    pub model_view: Mat4,      // 预乘: view * model
-    pub model_view_proj: Mat4, // 预乘: projection * view * model
-    pub normal_matrix: Mat3,   // 法线变换矩阵 (MVT 的逆的转置)
+    pub model: Mat4,             // 模型矩阵 (世界变换)
+    pub view: Mat4,              // 视图矩阵 (相机变换)
+    pub projection: Mat4,        // 投影矩阵 (透视/正交)
+    pub model_view: Mat4,        // 预乘: view * model
+    pub model_view_proj: Mat4,   // 预乘: projection * view * model
+    pub normal_matrix: Mat3,     // 法线变换矩阵 (MVT 的逆的转置)
+    /// 光源的 view·proj 矩阵。注意它是**光 pass 专属且循环不变**的：
+    /// 相机 pass 的顶点着色器要用它把世界坐标投影到光空间，
+    /// 绝不能用当前 pass 的 projection*view 覆盖（曾因此阴影永远算不出来）
+    pub light_view_proj: Option<Mat4>,
 
     // ---- 材质参数 ----
     pub light_dir: Vec3,      // 光照方向
@@ -776,4 +928,7 @@ pub struct Uniforms<'a> {
     pub normal_tex: Option<&'a TGAImage>,     // 法线纹理
     pub specular_tex: Option<&'a TGAImage>,   // 高光贴图
     pub glossiness_tex: Option<&'a TGAImage>, // 光泽度贴图
+    pub depth_tex_raw: Option<ShadowMap>, // 深度贴图（uniforms 拥有所有权，每帧从光 pass 克隆；
+                                          // 不能用引用：draw(&mut self, &uniforms) 会同时
+                                          // 要求对 pipeline 的可变+不可变借用）
 }

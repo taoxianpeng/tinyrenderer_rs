@@ -7,7 +7,9 @@ use glam::{Mat3, Vec3};
 use crate::drawline::TGAImageType::RGB;
 use crate::drawline::TGAImage;
 use crate::model::load_model;
-use crate::renderpipeline::{FragmentInput, Uniforms, Varying, VertexInput, VertexOutput};
+use crate::renderpipeline::{
+    FragmentInput, Uniforms, Varying, VaryingIndex, VertexInput, VertexOutput,
+};
 use crate::tgaimage::TGAColor;
 
 /// diablo3_pose 的全部资产：1 个模型 + 4 张贴图
@@ -73,7 +75,7 @@ pub fn vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOutput {
     let pos = uniforms.model_view_proj * input.pos.extend(1.0);
 
     // 获取局部法线
-    let local_normal = match input.varyings[1] {
+    let local_normal = match input.varyings[VaryingIndex::Normal] {
         Varying::Vec3(n) => n,
         _ => unreachable!("second varying must be normal"),
     };
@@ -81,7 +83,7 @@ pub fn vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOutput {
     let world_normal = (uniforms.normal_matrix * local_normal).normalize();
 
     // 获取局部切线 T（load_model 在加载时按面计算并写入 varyings[3]）
-    let local_tangent = match input.varyings[3] {
+    let local_tangent = match input.varyings[VaryingIndex::Tangent] {
         Varying::Vec3(t) => t,
         _ => unreachable!("fourth varying must be tangent"),
     };
@@ -101,9 +103,10 @@ pub fn vertex_shader(uniforms: &Uniforms, input: &VertexInput) -> VertexOutput {
     let b = world_normal.cross(t);
 
     let mut varyings = input.varyings.clone();
-    varyings[1] = Varying::Vec3(world_normal);
-    varyings[3] = Varying::Vec3(t); // 世界空间 T
-    varyings.push(Varying::Vec3(b)); // varyings[4]: 世界空间 B
+    varyings[VaryingIndex::Normal] = Varying::Vec3(world_normal);
+    varyings[VaryingIndex::Tangent] = Varying::Vec3(t); // 世界空间 T
+    // 槽位由 load_model 按 VaryingIndex::COUNT 建满，一律按下标赋值（不再 push）
+    varyings[VaryingIndex::Bitangent] = Varying::Vec3(b); // varyings[4]: 世界空间 B
 
     VertexOutput { pos, varyings: Some(varyings) }
 }
@@ -117,22 +120,22 @@ fn sample_texture(tex: &TGAImage, texcoord: &glam::Vec2) -> Option<TGAColor> {
 
 pub fn fragment_shader(uniforms: &Uniforms, frag: &FragmentInput, _depth: &Vec<f32>) -> TGAColor {
     // 插值得到的顶点法线（无 normal map 时的光照法线）
-    let vertex_normal = match frag.varyings[1] {
+    let vertex_normal = match frag.varyings[VaryingIndex::Normal] {
         Varying::Vec3(normal) => normal.normalize(),
         _ => unreachable!("second varying must be normal"),
     };
 
-    let texcoord = match frag.varyings[2] {
+    let texcoord = match frag.varyings[VaryingIndex::TexCoord] {
         Varying::Vec2(texcoord) => texcoord,
         _ => unreachable!("third varying must be texcoord"),
     };
 
     // 插值得到的世界空间 T、B（顶点着色器中已做 Gram-Schmidt 正交化）
-    let t = match frag.varyings[3] {
+    let t = match frag.varyings[VaryingIndex::Tangent] {
         Varying::Vec3(t) => t.normalize(),
         _ => unreachable!("fourth varying must be tangent"),
     };
-    let b = match frag.varyings[4] {
+    let b = match frag.varyings[VaryingIndex::Bitangent] {
         Varying::Vec3(b) => b.normalize(),
         _ => unreachable!("fifth varying must be bitangent"),
     };
@@ -238,6 +241,7 @@ mod tests {
             normal_matrix: Mat3::from_mat4(model_mat.inverse().transpose()),
             light_dir: Vec3::new(-1.0, 1.0, 1.0).normalize(),
             view_dir: (eye - center).normalize(),
+            light_view_proj: None,
             ambient_color: Vec3::new(0.5, 0.5, 0.5),
             diffuse_color: Vec3::new(0.7, 0.7, 0.7),
             specular_color: Vec3::new(0.3, 0.3, 0.3),
@@ -245,6 +249,7 @@ mod tests {
             normal_tex: Some(&normal_texture),
             specular_tex: None,
             glossiness_tex: None,
+            depth_tex_raw: None,
         };
 
         let mut framebuffer = FrameBuffer::new(width, height);

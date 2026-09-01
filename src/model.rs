@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::drawline::WHITE;
-use crate::renderpipeline::{Varying, VertexInput};
+use crate::renderpipeline::{Varying, VaryingIndex, VertexInput};
 
 pub type VertIndice = [u32; 3];
 pub type Face = Vec<VertIndice>;
@@ -55,7 +55,7 @@ pub fn load_model(path: &str, enable_tbn: bool) -> Option<Vec<VertexInput>> {
                         f * (delta_v2 * edge1.z - delta_v1 * edge2.z),
                     )
                     .normalize()
-                    // 注：B = cross(T, N) 留到顶点着色器中计算，省一个 varyings
+                    // 注：B = cross(N, T) 仍由顶点着色器计算，这里只是预留槽位
                 }
                 // 未启用 TBN 时用占位值，保持 varyings 数量一致
                 false => Vec3::ZERO,
@@ -68,15 +68,14 @@ pub fn load_model(path: &str, enable_tbn: bool) -> Option<Vec<VertexInput>> {
                     let vt = model.texture_verts()[idx[1] as usize];
                     Vec2::new(vt.x, vt.y)
                 };
-                vertices.push(VertexInput {
-                    pos,
-                    varyings: vec![
-                        Varying::Color(WHITE),
-                        Varying::Vec3(normal),
-                        Varying::Vec2(texcoord),
-                        Varying::Vec3(t_vec), // varyings[3]: 切线 T (TBN)
-                    ],
-                });
+                // varyings 按 VaryingIndex::COUNT 建满固定槽位：
+                // [4] 位切线 B、[5] 光源裁剪坐标由顶点着色器按下标写入
+                let mut varyings = vec![Varying::Float(0.0); VaryingIndex::COUNT];
+                varyings[VaryingIndex::Color] = Varying::Color(WHITE);
+                varyings[VaryingIndex::Normal] = Varying::Vec3(normal);
+                varyings[VaryingIndex::TexCoord] = Varying::Vec2(texcoord);
+                varyings[VaryingIndex::Tangent] = Varying::Vec3(t_vec);
+                vertices.push(VertexInput { pos, varyings });
             }
         }
     }
